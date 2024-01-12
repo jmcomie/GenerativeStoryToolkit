@@ -14,20 +14,12 @@ from pydantic import BaseModel
 from tqdm import tqdm
 
 from gstk.creation.formatters import (
-    _format_instance_for_vectorization,
     format_instance_for_vectorization,
+    format_node_for_creation_context,
+    format_node_for_selection_context,
     format_node_for_vectorization,
 )
-from gstk.creation.graph_registry import (
-    CreationEdge,
-    CreationNode,
-    GroupCollectionData,
-    GroupProperties,
-    GroupSummaryData,
-    Message,
-    Role,
-    SelectionData,
-)
+from gstk.creation.graph_registry import CreationEdge, CreationNode, GroupProperties, Message, Role, SelectionData
 from gstk.graph.interface.graph.graph import Node
 from gstk.graph.registry import NodeRegistry, NodeTypeData
 from gstk.graph.registry_context_manager import current_node_registry
@@ -41,13 +33,11 @@ class ConflictStrategy(StrEnum):
     raise_exception = "raise"
 
 
-async def get_chat_completion_object_response(
-    node_type: str, messages: list[Message], generate_vector: bool = False
-) -> (BaseModel, list[float]):
+async def get_chat_completion_object_response(node_type: str, messages: list[Message]) -> BaseModel:
     """
     Sends the message list to OpenAI and returns the response as an instance of the
     configured type for the node_type. This serves as the primary bridge between
-    the GFTK creation and graph pattern and OpenAI chat completion.
+    the GSTK creation and graph pattern and OpenAI chat completion.
     """
     node_registry: NodeRegistry = current_node_registry()
     node_type_data: NodeTypeData = node_registry.get_node_type_data(node_type)
@@ -58,11 +48,7 @@ async def get_chat_completion_object_response(
     instance: BaseModel = node_type_data.model(
         **json.loads(response.choices[0].message.tool_calls[0].function.arguments)
     )
-    vector: Optional[list[float]] = None
-    if generate_vector:
-        result = await get_openai_vectorization(format_instance_for_vectorization(node_type, instance))
-        vector = result.data[0].embedding
-    return instance, vector
+    return instance
 
 
 class CreationGroup:
@@ -71,8 +57,8 @@ class CreationGroup:
     """
 
     def __init__(self, node: Node):
-        if node.node_type != CreationNode.group:
-            raise ValueError(f"group_node must be a group node, not {node.node_type}")
+        # if node.node_type != CreationNode.group:
+        #    raise ValueError(f"group_node must be a group node, not {node.node_type}")
         self._node = node
 
     @property
@@ -81,7 +67,7 @@ class CreationGroup:
 
     def find(
         self,
-        query: str,
+        query: str | list[float],
         node_type_filter: list[str],
         count: int = 10,
         recursive: bool = False,
@@ -102,33 +88,37 @@ class CreationGroup:
             list[tuple[int, float]]: list of tulpes of node id and similarity score.
         """
         # Determine if we need custom formatters for each node's vectorization or per-field vectorization.
-        result = asyncio.run(get_openai_vectorization(query))
-        query_vector: list[float] = result.data[0].embedding
+        if isinstance(query, str):
+            result = asyncio.run(get_openai_vectorization(query))
+            query_vector: list[float] = result.data[0].embedding
+        elif isinstance(query, list):
+            query_vector = query
+        else:
+            raise ValueError(f"Invalid query type: {type(query)}")
 
         return self.node.find(
             query_vector,
             count=count,
             node_type_filter=node_type_filter,
             descend_into_types=[CreationNode.group] if recursive else [],
-            descend_unexported_edges=True,
             similarity_threshold=similarity_threshold,
         )
 
-    async def ensure_vectors(self, node_type_list: Optional[list[str]] = None, concurrent_count: int = 10):
+    async def ensure_vectors(self, node_type_filter: Optional[list[str]] = None, concurrent_count: int = 10):
         """
-        Ensure that child nodes have vectors. If node_type_list is provided, vectorizes only
+        Ensure that child nodes have vectors. If node_type_filter is provided, vectorizes only
         those nodes of a type present in list.
 
         Args:
-            node_type_list (Optional[list[str]], optional): Only vectorize nodes of these types. Defaults to None.
+            node_type_filter (Optional[list[str]], optional): Only vectorize nodes of these types. Defaults to None.
             concurrent_count (int, optional): Concurrent requests to OpenAI. Defaults to 10.
 
         XXX: This needs to be checked for correctness around semaphore acquisition.
         """
 
-        async def process_node(node, pbar):
+        async def process_node(node: Node, pbar):
             if not node.vector:
-                result = await get_openai_vectorization(_format_instance_for_vectorization(node.node_type, node.data))
+                result = await get_openai_vectorization(format_node_for_vectorization(node))
                 node.vector = result.data[0].embedding
                 node.save()
                 pbar.update(1)
@@ -138,13 +128,14 @@ class CreationGroup:
                 group_node: Node = self.node.graph.get_node(session, self.node.id)
                 tasks = []
                 with tqdm(desc="Processing") as pbar:
-                    for node in group_node.walk_tree(yield_node_types=node_type_list):
+                    for node in group_node.walk_tree(yield_node_types=node_type_filter):
                         if not node.vector:
                             # Create a coroutine for each node that needs processing and pass the pbar
                             task = asyncio.create_task(process_node(node, pbar))
                             tasks.append(task)
                     await asyncio.gather(*tasks)
                 session.commit()
+        self._node.refresh()
 
     async def select(self, prompt: str, node_type_filter: Optional[list[str]] = None) -> SelectionData:
         """
@@ -164,13 +155,11 @@ class CreationGroup:
         messages_iter: Iterator[Message] = self.list_messages_for_chat_completion(
             CreationNode.selection,
             prompt_str,
-            formatter=format_node_for_vectorization,
+            formatter=format_node_for_selection_context,
             node_type_filter=node_type_filter,
             edge_type_filter=[SystemEdgeType.contains],
         )
-        instance, _vector = await get_chat_completion_object_response(
-            CreationNode.selection, messages_iter, generate_vector=False
-        )
+        instance = await get_chat_completion_object_response(CreationNode.selection, messages_iter)
         return instance
 
     def set_node_referenced(self, node: int | Node):
@@ -213,22 +202,31 @@ class CreationGroup:
             self._node.add_out_edge(SystemEdgeType.contains, node)
             session.commit()
 
-    def add_new_node(self, node_type: str, data: BaseModel):
+    def add_new_node(self, node_type: str, data: BaseModel, prompt: Optional[str] = None) -> Node:
         """Add a node contained by this group of the given type and data.
 
         Args:
-            node_type (str): _description_
-            data (BaseModel): _description_
+            node_type (str): the node type to create
+            data (BaseModel): the data to use for creation
+            prompt (Optional[str], optional): add a synthetic creation prompt. Defaults to None.
         """
         # Add a node of the given type and data to this group.
         with self._node.graph.create_session() as session:
             group_node: Node = self._node.graph.get_node(session, self._node.id)
-            _edge, _node = group_node.add_out_node(node_type, data, SystemEdgeType.contains)
+            _edge, node = group_node.add_out_node(node_type, data, SystemEdgeType.contains)
+            assert isinstance(node, Node)
+            if prompt:
+                node.add_in_node(CreationNode.message, Message(role=Role.user, content=prompt), CreationEdge.created_by)
             session.commit()
+            node.session = self._node.session
+
+        self._node.refresh()
+        print("Refreshing node session")
+        return node
 
     def list_nodes_as_messages(
         self,
-        formatter: Callable[[node], str] = format_instance_for_vectorization,
+        formatter: Callable[[node], str] = format_node_for_vectorization,
         node_type_filter: Optional[list[str]] = None,
         edge_type_filter: Optional[list[str]] = None,
         include_all_prompts: bool = False,
@@ -250,7 +248,7 @@ class CreationGroup:
         ):
             assert isinstance(node, Node)
             if include_all_prompts:
-                for _edge, prompt_node in node.get_out_nodes(
+                for _edge, prompt_node in node.get_in_nodes(
                     node_type_filter=[CreationNode.message], edge_type_filter=[CreationEdge.created_by]
                 ):
                     assert isinstance(prompt_node, Node)
@@ -272,7 +270,13 @@ class CreationGroup:
         yield from self.list_nodes_as_messages(**kwargs)
         yield Message(role=Role.user, content=prompt_str)
 
-    async def create(self, node_type: str, prompt: str, supplemental_messages: Optional[list[Message]] = None):
+    async def create(
+        self,
+        node_type: str,
+        prompt: str,
+        supplemental_messages: Optional[list[Message]] = None,
+        create_as_orphan: bool = False,
+    ) -> Node:
         """Use the given prompt to create a new node of the given type.
 
         Args:
@@ -291,6 +295,7 @@ class CreationGroup:
                 prompt,
                 edge_type_filter=[SystemEdgeType.contains, SystemEdgeType.references],
                 include_all_prompts=True,
+                formatter=format_node_for_creation_context,
             )
 
             if supplemental_messages:
@@ -298,16 +303,23 @@ class CreationGroup:
                 # Insert supplemental messages just before the prompt.
                 messages_iter = iter(messages[:-1] + supplemental_messages + [messages[-1]])
 
-            instance, vector = await get_chat_completion_object_response(node_type, messages_iter)
-            print(f"node id: {self._node.id}")
-            group_node: Node = self._node.graph.get_node(session, self._node.id)
-            _edge, node = group_node.add_out_node(node_type, instance, SystemEdgeType.contains, vector=vector)
-            assert isinstance(node, Node)
-            node.add_out_node(CreationNode.message, Message(role=Role.user, content=prompt), CreationEdge.created_by)
-            session.commit()
-        self._node.refresh()
+            instance = await get_chat_completion_object_response(node_type, messages_iter)
 
-    async def update(self, node: int | Node, prompt: str):
+            group_node: Node = self._node.graph.get_node(session, self._node.id)
+            node: Node
+            if create_as_orphan:
+                node: Node = group_node.graph.add_node(session, node_type, instance)
+            else:
+                _edge, node = group_node.add_out_node(node_type, instance, SystemEdgeType.contains)
+            assert isinstance(node, Node)
+            node.add_in_node(CreationNode.message, Message(role=Role.user, content=prompt), CreationEdge.created_by)
+            session.commit()
+            node.session = self._node.session
+
+        self._node.refresh()
+        return node
+
+    async def update(self, node: int | Node, prompt: str) -> Node:
         """
         Update the data in the given node according to the prompt.
         Note that the given node must be contained by this group.
@@ -317,7 +329,7 @@ class CreationGroup:
             prompt (str): the prompt to use for updating the node
 
         Raises:
-            ValueError: if the given node is not contained by this group
+            ValueError: if the given node is not contained by this group.
         """
         with self._node.graph.create_session() as session:
             # Reopen the group node in the new session to preserve the
@@ -328,8 +340,10 @@ class CreationGroup:
                 node.session = session
             if isinstance(node, int):
                 node: Node = group_node.graph.get_node(session, node)
-            if not group_node.graph.get_edge(session, group_node.id, node.id, SystemEdgeType.contains):
-                raise ValueError(f"Node {node.id} is not contained by group {group_node.id}")
+            if not group_node.graph.get_edge(session, group_node.id, node.id, SystemEdgeType.contains) and list(
+                node.get_in_nodes(edge_type_filter=[SystemEdgeType.contains])
+            ):
+                raise ValueError(f"Node {node.id} is not contained by group {group_node.id} and is not an orphan.")
 
             # Load context imports.
             messages: list[Message] = list(
@@ -342,8 +356,7 @@ class CreationGroup:
             messages.append(
                 Message(
                     role=Role.assistant,
-                    content="This is the node data to update:\n"
-                    + _format_instance_for_vectorization(node.node_type, node.data),
+                    content="This is the node data to update:\n" + format_node_for_creation_context(node),
                 )
             )
 
@@ -357,35 +370,31 @@ class CreationGroup:
             )
 
             # Get response from OpenAI.
-            instance, vector = await get_chat_completion_object_response(node.node_type, messages)
+            instance = await get_chat_completion_object_response(node.node_type, messages)
 
             assert isinstance(instance, BaseModel)
 
             # Update the node.
-            original_data: BaseModel = node.data
-            node.data = instance
-            node.vector = vector
-
             # Add the original node and the update prompt as messages.
-            node.add_out_node(
+            node.add_in_node(
                 CreationNode.message,
-                Message(role=Role.assistant, content=_format_instance_for_vectorization(node.node_type, original_data)),
+                Message(role=Role.assistant, content=format_node_for_creation_context(node)),
                 CreationEdge.created_by,
             )
-
-            node.add_out_node(CreationNode.message, Message(role=Role.user, content=prompt), CreationEdge.created_by)
+            node.data = instance
+            node.add_in_node(CreationNode.message, Message(role=Role.user, content=prompt), CreationEdge.created_by)
 
             node.save()
             assert node.session == session
             session.commit()
+            node.session = self._node.session
 
         # Refresh default session.
         self._node.refresh()
+        return node
 
 
-def new_group(
-    node: Node, group_properties: GroupProperties, group_data: GroupCollectionData | GroupSummaryData
-) -> Node:
+def new_group(node: Node, group_properties: GroupProperties) -> Node:
     """
     Create a new group as a child of the given node with the given properties and data.
     The edge type of the group is SystemEdgeType.contains.
@@ -393,10 +402,4 @@ def new_group(
     if not isinstance(node, Node):
         raise ValueError(f"node must be a Node, not {type(node)}")
     edge, group_node = node.add_out_node(CreationNode.group, group_properties, SystemEdgeType.contains)
-    if isinstance(group_data, GroupCollectionData):
-        group_node.add_out_node(CreationNode.group_collection_data, group_data, CreationEdge.metadata)
-    elif isinstance(group_data, GroupSummaryData):
-        group_node.add_out_node(CreationNode.group_summary_data, group_data, CreationEdge.metadata)
-    else:
-        raise ValueError(f"Invalid group_data type: {type(group_data)}")
     return group_node

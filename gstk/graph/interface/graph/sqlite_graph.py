@@ -99,10 +99,18 @@ class SQLiteGraph(Graph):
         return SQLiteEdge(edge, self, session)
 
     def delete_node(self, session: Session, node_id: int):
-        session.query(NodeModel).filter_by(id=node_id).delete()
+        node: Optional[NodeModel] = session.query(NodeModel).filter_by(id=node_id).first()
+        if node is None:
+            return
+        if node.out_edges:
+            raise ValueError("Cannot delete node with outgoing edges")
+        session.delete(node)
 
     def delete_edge(self, session: Session, edge_id: int):
         session.query(EdgeModel).filter_by(id=edge_id).delete()
+
+    def delete_edge_by_nodes(self, session: Session, from_id: int, to_id: int):
+        session.query(EdgeModel).filter_by(from_id=from_id, to_id=to_id).delete()
 
     def get_node(self, session: Session, node_id: int) -> Optional["SQLiteNode"]:
         result = session.query(NodeModel).filter_by(id=node_id).first()
@@ -248,6 +256,7 @@ class SQLiteNode(Node):
 
     def refresh(self):
         assert isinstance(self.session, Session)
+        self.session.expire_all()
         self.session.refresh(self._sqlalchemy_obj)
 
     def save(self):

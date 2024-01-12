@@ -1,3 +1,4 @@
+import shutil
 import urllib.parse
 from pathlib import Path
 from typing import Optional
@@ -17,6 +18,14 @@ class LocalFileLocator(ResourceLocator):
         base_path = base_path / LocalFileLocator.PROJECTS_DIRECTORY_NAME
         self._base_path = base_path
 
+    @property
+    def base_path(self) -> Path:
+        return self._base_path
+
+    @base_path.setter
+    def base_path(self, value: Path):
+        self._base_path = value
+
     def list_project_ids(self) -> list[str]:
         try:
             return [
@@ -32,3 +41,8 @@ class LocalFileLocator(ResourceLocator):
 
     def get_project_resource_location(self, project_id: str) -> Path:
         return self._base_path / urllib.parse.quote(project_id, safe="")
+
+    def delete_project(self, project_id: str) -> None:
+        project_path = self.get_project_resource_location(project_id)
+        if project_path.exists():
+            shutil.rmtree(project_path)

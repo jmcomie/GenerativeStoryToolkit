@@ -178,6 +178,32 @@ class Node(ABC):
         seen: set[int] = {self.id}
         yield from _walk_tree_helper(self, descend_into_types, yield_node_types, edge_type_filter, seen)
 
+    def build_vector_index(
+            self,
+            node_type_filter: Optional[list[str]] = None,
+            edge_type_filter: Optional[list[str]] = None,
+            descend_into_types: Optional[list[str]] = None,
+    ) -> tuple[faiss.IndexFlatIP, list[int]]:
+        """
+        Build a vector index for descendent nodes.
+        """
+        index: Optional[faiss.IndexFlatIP] = None
+        node_ids: list[int] = []
+        for node in self.walk_tree(
+            descend_into_types=descend_into_types,
+            yield_node_types=node_type_filter,
+            edge_type_filter=edge_type_filter,
+        ):
+            if node.vector is None:
+                continue
+            if index is None:
+                dim: int = np.array(node.vector).shape[0]
+                index = faiss.IndexFlatIP(dim)
+            index.add(np.array([node.vector]))
+            node_ids.append(node.id)
+        assert index is not None
+        return index, node_ids
+
     def find(
         self,
         query_vector: list[float],
@@ -187,31 +213,21 @@ class Node(ABC):
         descend_into_types: Optional[list[str]] = None,
         similarity_threshold: Optional[list[float]] = None,
     ) -> list[tuple[int, float]]:
-        query_vector = np.array(query_vector)
-        dim: int = query_vector.shape[0]
-        index = faiss.IndexFlatIP(dim)
-
-        node_ids: list[int] = []
-        for node in self.walk_tree(
-            descend_into_types=descend_into_types,
-            yield_node_types=node_type_filter,
+        index, node_ids = self.build_vector_index(
+            node_type_filter=node_type_filter,
             edge_type_filter=edge_type_filter,
-        ):
-            if node.vector is None:
-                continue
-            index.add(np.array([node.vector]))
-            node_ids.append(node.id)
-
-        D, I = index.search(np.array([query_vector]), count)  # noqa
+            descend_into_types=descend_into_types,
+        )
+        query_vector = np.array(query_vector)
+        # D: distances/similarities, I: indices
+        # 0 is the query vector index
+        D, I = index.search(np.array([query_vector]), count)            
         assert len(I) == 1
-        print(D)
-        print(I)
         return [
             (node_ids[I[0][i]], D[0][i])
             for i in range(len(I[0]))
             if similarity_threshold is None or D[i] >= similarity_threshold
         ]
-
 
 def _walk_tree_helper(
     iter_node: "Node",

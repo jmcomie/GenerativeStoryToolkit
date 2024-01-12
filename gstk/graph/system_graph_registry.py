@@ -18,6 +18,7 @@ class ProjectProperties(BaseModel):
     id: str
     name: Optional[str] = None
     description: Optional[str] = None
+    supplemental_data: Optional[dict] = None
 
 
 class MediaProperties(BaseModel):

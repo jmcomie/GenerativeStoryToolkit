@@ -14,3 +14,7 @@ class ResourceLocator(ABC):
     @abstractmethod
     def project_id_exists(self, project_id: str) -> bool:
         pass
+
+    @abstractmethod
+    def delete_project(project_id: str) -> None:
+        pass

@@ -37,7 +37,6 @@ async def get_chat_completion_response(
 
     print("MESSAGES")
     pprint.pprint(messages)
-
     tool_choice: Optional[Literal["auto"] | dict]
     if not tools:
         tool_choice = None
@@ -48,6 +47,7 @@ async def get_chat_completion_response(
         tool_choice = "auto"
 
     openai.api_key = os.environ["OPENAI_API_KEY"]
+    # max_tokens argument not used.
     return await ChatCompletion.acreate(
         model=chat_gpt_model,
         messages=[message.model_dump(exclude={"name"}) for message in messages],
@@ -55,7 +55,6 @@ async def get_chat_completion_response(
         temperature=chat_gpt_temperature,
         tool_choice=tool_choice,
     )
-    # max_tokens not used.
 
 
 def get_function_tool(name: str, model: type[BaseModel]):

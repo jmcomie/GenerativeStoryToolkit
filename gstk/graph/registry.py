@@ -7,8 +7,8 @@ from typing import Optional, Type
 from pydantic import BaseModel
 
 ALL_NODES: str = "*"
-NodeTypeInPolicyRegex: re.Pattern = re.compile(r"((['a-z']+)\.(['a-z']+|\*))$|(\*)")
-NodeOrEdgeTypeRegex: re.Pattern = re.compile(r"(['a-z']+)\.(['a-z']+)")
+NodeTypeInPolicyRegex: re.Pattern = re.compile(r"(([a-z_]+)\.([a-z_]+|\*))$|(\*)")
+NodeOrEdgeTypeRegex: re.Pattern = re.compile(r"([a-z_]+)\.([a-z_]+)")
 
 
 class NodeTypeData(BaseModel):
@@ -65,8 +65,6 @@ def node_type_matches_type_in_policy(node_type: str, type_in_policy: str):
 
 @cache
 def node_type_matches_type_in_policy_list(node_type: str | list[str], type_in_policy_list: list[str]):
-    print("in node_type_matches_type_in_policy_list")
-    print(f"node_type_matches_type_in_policy_list: {node_type}, {type_in_policy_list}")
     return any([node_type_matches_type_in_policy(node_type, type_in_policy) for type_in_policy in type_in_policy_list])
 
 

@@ -14,11 +14,11 @@ python-dotenv = "^1.0.0"
 openai = {extras = ["datalib", "embeddings"], version = "^0.27.9"}
 appdirs = "^1.4.4"
 tiktoken = "^0.5.1"
-langchain-experimental = "^0.0.43"
 jsonschema = "^4.20.0"
 faiss-cpu = "^1.7.4"
 pre-commit = "^3.6.0"
 jupyter = "^1.0.0"
+langchain-experimental = "^0.0.50"
 
 [tool.poetry-dynamic-versioning]
 enable = true
@@ -27,7 +27,7 @@ enable = true
 setuptools = "^68.1.2"
 
 [build-system]
-requires = ["poetry-core"]
+requires = ["poetry-core>=1.0.0", "poetry-dynamic-versioning>=1.0.0,<2.0.0"]
 build-backend = "poetry_dynamic_versioning.backend"
 
 [tool.black]

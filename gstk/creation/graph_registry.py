@@ -30,6 +30,15 @@ class Message(BaseModel):
         use_enum_values = True
 
 
+class Labels(BaseModel):
+    """
+    Labels are names, tags or some other identifier that the user is creating.
+    """
+
+    desired_quantity: int = Field(description="The desired number of labels. Infer from prompt.")
+    labels: list[str] = Field(description="The labels themselves, of the desired quantity.")
+
+
 class ChatCompletionArguments(BaseModel):
     pass
 
@@ -37,9 +46,8 @@ class ChatCompletionArguments(BaseModel):
 class CreationNode(StrEnum):
     group = "creation.group"
     message = "creation.message"
-    group_collection_data = "creation.group_collection_data"
-    group_summary_data = "creation.group_summary_data"
     selection = "creation.selection"
+    labels = "creation.labels"
     ALL = "creation.*"
 
 
@@ -50,14 +58,6 @@ class CreationEdge(StrEnum):
 
 class GroupProperties(BaseModel):
     name: str
-
-
-class GroupCollectionData(BaseModel):
-    pass
-
-
-class GroupSummaryData(BaseModel):
-    pass
 
 
 class SelectionData(BaseModel):
@@ -76,24 +76,18 @@ CreationNodeRegistry.register_node(CreationNode.selection, model=SelectionData)
 
 CreationNodeRegistry.register_node(CreationNode.message, model=Message)
 
-CreationNodeRegistry.register_node(CreationNode.group_collection_data, model=GroupCollectionData)
-
-CreationNodeRegistry.register_node(CreationNode.group_summary_data, model=GroupSummaryData)
+CreationNodeRegistry.register_node(
+    CreationNode.labels,
+    model=Labels,
+    system_message="You are tasked with interpreting some term for a identifier and interpreting it "
+    + "as a list of labels according to the logic of the prompt provided.",
+)
 
 CreationEdgeRegistry.register_connection_types(
     CreationNode.group, CreationNode.message, [SystemEdgeType.references, SystemEdgeType.contains]
 )
 
 CreationEdgeRegistry.register_connection_types(CreationNode.group, CreationNode.group, [SystemEdgeType.contains])
-
-CreationEdgeRegistry.register_edge(
-    CreationEdge.metadata,
-    EdgeCardinality.ONE_TO_MANY,
-    connection_data=[
-        [CreationNode.group, CreationNode.group_collection_data],
-        [CreationNode.group, CreationNode.group_summary_data],
-    ],
-)
 
 CreationEdgeRegistry.register_edge(
     CreationEdge.created_by, EdgeCardinality.MANY_TO_MANY, connection_data=[[ALL_NODES, CreationNode.message]]
