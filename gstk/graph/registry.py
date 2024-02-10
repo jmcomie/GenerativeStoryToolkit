@@ -1,8 +1,8 @@
 import copy
 import re
-from enum import Enum
+from enum import Enum, StrEnum
 from functools import cache
-from typing import Optional, Type
+from typing import Iterator, Optional, Type
 
 from pydantic import BaseModel
 
@@ -68,9 +68,46 @@ def node_type_matches_type_in_policy_list(node_type: str | list[str], type_in_po
     return any([node_type_matches_type_in_policy(node_type, type_in_policy) for type_in_policy in type_in_policy_list])
 
 
-class EdgeRegistry:
-    def __init__(self, edge_type_map: Optional[dict[str, EdgeTypeData]] = None):
-        self._edge_type_map = edge_type_map or dict()
+class GraphRegistry:
+    node_type_map: dict[str, NodeTypeData] = {}
+    edge_type_map: dict[str, EdgeTypeData] = {}
+
+    @classmethod
+    def node_type(cls, node_type, instance_limit: Optional[int] = None):
+        if node_type in cls.registry:
+            raise ValueError(f"Node type {node_type} already registered")
+        def decorator(model: type):
+            system_message: Optional[str] = getattr(model, "_system_message", None)
+            cls.register_node(node_type, model, instance_limit=instance_limit, system_message=system_message)
+            return model
+        return decorator
+
+    def get_node_types(cls, model: type) -> Iterator[str]:
+        for node_type, node_type_data in cls.node_type_map.items():
+            if node_type_data.model == model:
+                yield node_type
+        raise ValueError(f"Model {model} not registered.")
+
+    def get_model(cls, node_type) -> type:
+        return cls.registry[node_type]
+
+    def register_node(
+        self,
+        node_type: str,
+        model: Type[BaseModel],
+        instance_limit: Optional[int] = None,
+        system_message: Optional[str] = None,
+    ):
+        if node_type in self.node_type_map:
+            raise Exception(f"Node type {node_type} already registered.")
+        self.node_type_map[node_type] = NodeTypeData(
+            instance_limit=instance_limit, model=model, system_directive=system_message
+        )
+
+    def get_node_type_data(self, node_type: str) -> NodeTypeData:
+        if node_type not in self.node_type_map:
+            raise Exception(f"Node type {node_type} not registered.")
+        return self.node_type_map[node_type]
 
     def register_edge(
         self,
@@ -80,56 +117,31 @@ class EdgeRegistry:
         connection_data: Optional[list[tuple[str, str]]] = None,
     ):
         check_node_or_edge_type(edge_type)
-        if edge_type in self._edge_type_map:
+        if edge_type in self.edge_type_map:
             raise Exception(f"Edge type {edge_type} already registered.")
         if connection_data is None:
             connection_data = []
-        self._edge_type_map[edge_type] = EdgeTypeData(
+        self.edge_type_map[edge_type] = EdgeTypeData(
             edge_cardinality=edge_cardinality, connection_data=connection_data
         )
 
-    def deregister_edge(self, edge_type: str):
-        if edge_type not in self._edge_type_map:
-            raise Exception(f"Edge type {edge_type} not registered.")
-
     def register_connection_type(self, from_node_type: str, to_node_type: str, edge_type: str):
         # If we have cardinality here, what does it look like?
-
         if not self.is_registered(edge_type):
             raise Exception(f"Edge type {edge_type} not registered.")
-        self._edge_type_map[edge_type].connection_data.add((from_node_type, to_node_type))
+        self.edge_type_map[edge_type].connection_data.add((from_node_type, to_node_type))
 
     def register_connection_types(self, from_node_type: str, to_node_type: str, edge_type_list: list[str]):
         for edge_type in edge_type_list:
             self.register_connection_type(from_node_type, to_node_type, edge_type)
 
-    def deregister_connection_types(self, from_node_type, to_node_type, edge_type):
-        if not self.is_registered(edge_type):
-            raise Exception(f"Connection types {from_node_type}, {to_node_type}, {edge_type} not registered.")
-        self._edge_type_map[edge_type].connection_data.remove((from_node_type, to_node_type))
-
-    def disable_edge(self, edge_type: str):
-        self._edge_type_map[edge_type].write_allowed = False
-
-    def enable_edge(self, edge_type: str):
-        self._edge_type_map[edge_type].write_allowed = True
-
-    def is_enabled(self, edge_type: str) -> bool:
-        return self._edge_type_map[edge_type].write_allowed
-
-    def is_registered(self, edge_type: str) -> bool:
-        return edge_type in self._edge_type_map
-
     def get_edge_type_data(self, edge_type: str) -> EdgeTypeData:
-        if edge_type not in self._edge_type_map:
+        if edge_type not in self.edge_type_map:
             raise Exception(f"Edge type {edge_type} not registered.")
-        return self._edge_type_map[edge_type]
-
-    def clone(self) -> Type["EdgeRegistry"]:
-        return EdgeRegistry(copy.deepcopy(self._edge_type_map))
+        return self.edge_type_map[edge_type]
 
     def is_registered_connection(self, from_node_type: str, to_node_type: str, edge_type: str) -> bool:
-        for from_node_type_in_policy, to_node_type_in_policy in self._edge_type_map[edge_type].connection_data:
+        for from_node_type_in_policy, to_node_type_in_policy in self.edge_type_map[edge_type].connection_data:
             if node_type_matches_type_in_policy(
                 from_node_type, from_node_type_in_policy
             ) and node_type_matches_type_in_policy(to_node_type, to_node_type_in_policy):
@@ -137,42 +149,41 @@ class EdgeRegistry:
         return False
 
 
-class NodeRegistry:
-    def __init__(self, node_type_map: Optional[dict[str, NodeTypeData]] = None):
-        self._node_type_map = node_type_map or dict()
+class SystemNodeType(StrEnum):
+    project = "system.project"
+    media = "system.media"
+    ALL = "system.*"
 
-    def register_node(
-        self,
-        node_type: str,
-        model: Type[BaseModel],
-        instance_limit: Optional[int] = None,
-        system_message: Optional[str] = None,
-    ):
-        if node_type in self._node_type_map:
-            raise Exception(f"Node type {node_type} already registered.")
-        self._node_type_map[node_type] = NodeTypeData(
-            instance_limit=instance_limit, model=model, system_directive=system_message
-        )
 
-    def deregister_node(self, node_type: str):
-        del self._node_type_map[node_type]
+class SystemEdgeType(StrEnum):
+    clone = "system.clone"
+    contains = "system.contains"
+    references = "system.references"
 
-    def disable_node(self, node_type: str):
-        self._node_type_map[node_type].write_allowed = False
 
-    def enable_node(self, node_type: str):
-        self._node_type_map[node_type].write_allowed = True
+@GraphRegistry.node_type(SystemNodeType.project.value, instance_limit=1)
+class ProjectProperties(BaseModel):
+    id: str
+    name: Optional[str] = None
+    description: Optional[str] = None
+    supplemental_data: Optional[dict] = None
 
-    def is_enabled(self, node_type: str) -> bool:
-        return self._node_type_map[node_type].write_allowed
 
-    def is_registered(self, node_type: str) -> bool:
-        return node_type in self._node_type_map
+@GraphRegistry.node_type(SystemNodeType.media.value)
+class MediaProperties(BaseModel):
+    path: str
+    name: Optional[str] = None
+    media_vector: Optional[list[float]] = None
 
-    def get_node_type_data(self, node_type: str) -> NodeTypeData:
-        if node_type not in self._node_type_map:
-            raise Exception(f"Node type {node_type} not registered.")
-        return self._node_type_map[node_type]
 
-    def clone(self) -> Type["NodeRegistry"]:
-        return NodeRegistry(copy.deepcopy(self._node_type_map))
+GraphRegistry.register_edge(
+    SystemEdgeType.references,
+    edge_cardinality=EdgeCardinality.MANY_TO_MANY,
+)
+GraphRegistry.register_edge(
+    SystemEdgeType.clone, edge_cardinality=EdgeCardinality.ONE_TO_MANY, connection_data=[[ALL_NODES, ALL_NODES]]
+)
+GraphRegistry.register_edge(SystemEdgeType.contains, EdgeCardinality.ONE_TO_MANY)
+
+# Any node can contain or reference any other node.
+GraphRegistry.register_connection_types(ALL_NODES, ALL_NODES, [SystemEdgeType.contains, SystemEdgeType.references])

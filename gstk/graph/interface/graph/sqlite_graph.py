@@ -1,5 +1,5 @@
 import datetime
-from functools import cache
+from functools import cache, reduce
 from pathlib import Path
 from typing import Any, Iterator, Optional
 
@@ -11,7 +11,7 @@ from gstk.graph.check import check_edge_add, check_node_add
 from gstk.graph.interface.graph.graph import Edge, Graph, Node
 from gstk.graph.registry import node_type_matches_type_in_policy_list
 from gstk.graph.registry_context_manager import current_node_registry
-from gstk.graph.system_graph_registry import SystemNodeType
+from gstk.graph.system_graph_registry import SystemEdgeType, SystemNodeType
 
 # Define the base model
 Base = declarative_base()
@@ -60,29 +60,29 @@ def get_session(path: str):
     return Session()
 
 
-class SQLiteGraph(Graph):
+class Graph:
     db_filename: str = "graph.sqlite"
     media_directory: str = "media"
 
     def __init__(self, project_resource_location: Path):
         self._project_resource_location = Path(project_resource_location)
 
-    def get_project_node(self, session: Session) -> Optional["SQLiteNode"]:
+    def get_project_node(self, session: Session) -> Optional["Node"]:
         for node in session.query(NodeModel).filter_by(node_type=SystemNodeType.project):
-            return SQLiteNode(node, self, session)
+            return Node(node, self, session)
 
     def add_node(
-        self, session: Session, node_type: str, data: BaseModel, vector: Optional[list[float]] = None
-    ) -> "SQLiteNode":
-        check_node_add(session, self, node_type, data, vector=vector)
+        self, session: Session, data: BaseModel, vector: Optional[list[float]] = None
+    ) -> "Node":
+        check_node_add(session, self, data, vector=vector)
         node: NodeModel = NodeModel(
-            node_type=node_type,
+            node_type=GraphRegistry.node_type_from_data(data),
             vector=vector,
             data=data.model_dump(),
         )
         session.add(node)
         session.flush()
-        return SQLiteNode(node, self, session)
+        return Node(node, self, session)
 
     def add_edge(
         self,
@@ -91,13 +91,13 @@ class SQLiteGraph(Graph):
         from_id: int,
         to_id: int,
         sort_idx: Optional[int] = None,
-    ) -> "SQLiteEdge":
+    ) -> EdgeModel:
         check_edge_add(session, self, edge_type, from_id, to_id)
         edge: EdgeModel = EdgeModel(edge_type=edge_type, from_id=from_id, to_id=to_id, sort_idx=sort_idx)
         session.add(edge)
         session.flush()
-        return SQLiteEdge(edge, self, session)
-
+        return edge
+    
     def delete_node(self, session: Session, node_id: int):
         node: Optional[NodeModel] = session.query(NodeModel).filter_by(id=node_id).first()
         if node is None:
@@ -112,40 +112,39 @@ class SQLiteGraph(Graph):
     def delete_edge_by_nodes(self, session: Session, from_id: int, to_id: int):
         session.query(EdgeModel).filter_by(from_id=from_id, to_id=to_id).delete()
 
-    def get_node(self, session: Session, node_id: int) -> Optional["SQLiteNode"]:
+    def get_node(self, session: Session, node_id: int) -> Optional["Node"]:
         result = session.query(NodeModel).filter_by(id=node_id).first()
-        return SQLiteNode(result, self, session) if result else None
+        return Node(result, self, session) if result else None
 
-    def get_edge_by_id(self, session: Session, edge_id: int) -> Optional["SQLiteEdge"]:
-        result = session.query(EdgeModel).filter_by(id=edge_id).first()
-        return SQLiteEdge(result, self, session) if result else None
+    def get_edge_by_id(self, session: Session, edge_id: int) -> Optional[EdgeModel]:
+        return session.query(EdgeModel).filter_by(id=edge_id).first()
 
-    def get_edge(self, session: Session, from_id: int, to_id: int, edge_type: str) -> Optional["SQLiteEdge"]:
+    def get_edge(self, session: Session, from_id: int, to_id: int, edge_type: str) -> Optional[EdgeModel]:
         result = session.query(EdgeModel).filter_by(from_id=from_id, to_id=to_id, edge_type=edge_type).first()
-        return SQLiteEdge(result, self, session) if result else None
+        return EdgeModel
 
-    def list_nodes(self, session: Session, node_type_filter: Optional[list[str]] = None) -> Iterator["SQLiteNode"]:
+    def list_nodes(self, session: Session, node_type_filter: Optional[list[str]] = None) -> Iterator["Node"]:
         if node_type_filter is None:
             query = session.query(NodeModel)
         else:
             query = session.query(NodeModel).filter(NodeModel.node_type.in_(node_type_filter))
         for node in query:
-            yield SQLiteNode(node, self, session)
+            yield Node(node, self, session)
 
-    def list_edges(self, session: Session, edge_type_filter: Optional[list[str]] = None) -> Iterator["SQLiteEdge"]:
+    def list_edges(self, session: Session, edge_type_filter: Optional[list[str]] = None) -> Iterator[EdgeModel]:
         if edge_type_filter is None:
             query = session.query(EdgeModel)
         else:
             query = session.query(EdgeModel).filter(EdgeModel.edge_type.in_(edge_type_filter))
         for edge in query:
-            yield SQLiteEdge(edge, self, session)
+            yield edge
 
     def create_session(self) -> Session:
         self._project_resource_location.mkdir(parents=True, exist_ok=True)
         return get_session(str(self._project_resource_location / self.db_filename))
 
 
-class SQLiteNode(Node):
+class Node:
     def __init__(self, sqlalchemy_obj: NodeModel, graph: SQLiteGraph, session: Session):
         if not isinstance(sqlalchemy_obj, NodeModel):
             raise ValueError(f"sqlalchemy_obj must be a NodeModel, not {type(sqlalchemy_obj)}")
@@ -210,49 +209,57 @@ class SQLiteNode(Node):
     def deleted_at(self) -> datetime.datetime:
         return self._sqlalchemy_obj.deleted_at
 
-    def get_out_nodes(
-        self, edge_type_filter: Optional[list[str]] = None, node_type_filter: Optional[list[str]] = None
-    ) -> Iterator[tuple["SQLiteEdge", "SQLiteNode"]]:
+    def _check_node_data_against_filters(self, node: NodeModel, filters: list[dict]) -> bool:
+        for filter in filters:
+            for key, value in filter.items():
+                if key not in node.data or node.data[key] != value:
+                    return False
+        return True
+
+    def list_children(self, filters=[]) -> Iterator["Node"]:
         for edge in self._sqlalchemy_obj.out_edges:
             assert isinstance(edge, EdgeModel)
             assert isinstance(edge.out_node, NodeModel)
-            if (edge_type_filter is None or edge.edge_type in edge_type_filter) and (
-                node_type_filter is None
-                or node_type_matches_type_in_policy_list(edge.out_node.node_type, tuple(node_type_filter))
-            ):
-                yield SQLiteEdge(edge, self._graph, self.session), SQLiteNode(edge.out_node, self._graph, self.session)
+            if not self._check_node_data_against_filters(edge.out_node, filters):
+                continue
+            yield Node(edge.out_node, self._graph, self.session)
 
-    def get_in_nodes(
-        self, edge_type_filter: Optional[list[str]] = None, node_type_filter: Optional[list[str]] = None
-    ) -> list[tuple["SQLiteEdge", "SQLiteNode"]]:
-        for edge in self._sqlalchemy_obj.in_edges:
+    @property
+    def parent(self):
+        for edge in self._sqlalchemy_obj.out_edges:
+            if edge.edge_type == SystemEdgeType.contains:
+                return Node(edge.out_node, self._graph, self.session)
+        return None
+
+    def create_child(self, data: BaseModel, conflict_filter: Optional[dict] = None, overwrite_on_conflict: bool = False):
+        node: NodeModel = self._graph.add_node(self.session, data)
+        edge: EdgeModel = self._graph.add_edge(self.session, SystemEdgeType.contains, self.id, node.id)
+        return edge, node
+
+    def create_child_reference(self, reference_to: "Node"|int, conflict_filter: Optional[dict] = None, overwrite_on_conflict: bool = False):
+        reference_node_id: int = reference_to if isinstance(reference_to, int) else reference_to.id
+        edge: EdgeModel = self._graph.add_edge(self.session, SystemEdgeType.contains, self.id, reference_node_id)
+
+    def delete_child(self, child: int|"Node"):
+        child_id = child_id if isinstance(child_id, int) else child_id.id
+        self._graph.delete_node(self.session, child_id)
+
+    def _get_descendent_nodes(self, filters: list[dict], seen: set) -> Iterator["Node"]:
+        for edge in self._sqlalchemy_obj.out_edges:
+            if edge.out_node.id in seen:
+                continue
+            seen.add(edge.out_node.id)
             assert isinstance(edge, EdgeModel)
-            assert isinstance(edge.in_node, NodeModel)
-            if (edge_type_filter is None or edge.edge_type in edge_type_filter) and (
-                node_type_filter is None
-                or node_type_matches_type_in_policy_list(edge.in_node.node_type, tuple(node_type_filter))
-            ):
-                yield SQLiteEdge(edge, self._graph, self.session), SQLiteNode(edge.in_node, self._graph, self.session)
+            assert isinstance(edge.out_node, NodeModel)
+            if self._check_node_data_against_filters(edge.out_node, filters):
+                yield Node(edge.out_node, self._graph, self.session)
+            if edge.edge_type == SystemEdgeType.contains:
+                yield from Node(edge.out_node, self._graph, self.session)._get_descendent_nodes(filters, seen)
 
-    def add_out_edge(self, edge_type: str, to_node: "SQLiteNode", sort_idx: Optional[int] = None) -> "SQLiteEdge":
-        self._graph.add_edge(self._session, edge_type, self.id, to_node.id, sort_idx=sort_idx)
-
-    def add_in_edge(self, edge_type: str, from_node: "SQLiteNode", sort_idx: Optional[int] = None) -> "SQLiteEdge":
-        return SQLiteEdge(self._graph.add_edge(self.session, edge_type, from_node.id, self.id, sort_idx=sort_idx))
-
-    def add_out_node(
-        self, node_type: str, data: Any, edge_type: str, vector: Optional[list[float]] = None
-    ) -> tuple["SQLiteEdge", "SQLiteNode"]:
-        node: NodeModel = self._graph.add_node(self.session, node_type, data, vector=vector)
-        edge: EdgeModel = self._graph.add_edge(self.session, edge_type, self.id, node.id)
-        return edge, node
-
-    def add_in_node(
-        self, node_type: str, data: Any, edge_type: str, vector: Optional[list[float]] = None
-    ) -> tuple["SQLiteEdge", "SQLiteNode"]:
-        node: NodeModel = self._graph.add_node(self.session, node_type, data, vector=vector)
-        edge: EdgeModel = self._graph.add_edge(self.session, edge_type, node.id, self.id)
-        return edge, node
+    def get_descendent_nodes(self, filters: list[dict]) -> Iterator["Node"]:
+        if not filters:
+            raise ValueError("Filters must be provided.")
+        yield from self._get_descendent_nodes(filters, set())
 
     def refresh(self):
         assert isinstance(self.session, Session)
@@ -264,55 +271,85 @@ class SQLiteNode(Node):
         self.session.add(self._sqlalchemy_obj)
         self.session.flush()
 
+    def walk_tree(
+        self,
+        descend_into_types: Optional[list[str]] = None,
+        yield_node_types: Optional[list[str]] = None,
+        edge_type_filter: Optional[list[str]] = None,
+    ) -> Iterator[type["Node"]]:
+        """
+        Cycle-safe but may traverse nodes closer to the project root than the given node.
+        That logic will be inherited from a proper graph data object.
+        """
+        seen: set[int] = {self.id}
+        yield from _walk_tree_helper(self, descend_into_types, yield_node_types, edge_type_filter, seen)
 
-class SQLiteEdge(Edge):
-    def __init__(self, sqlalchemy_obj: EdgeModel, graph: SQLiteGraph, session: Session):
-        self._sqlalchemy_obj = sqlalchemy_obj
-        self._graph = graph
-        self._session = session
+    def build_vector_index(
+            self,
+            node_type_filter: Optional[list[str]] = None,
+            edge_type_filter: Optional[list[str]] = None,
+            descend_into_types: Optional[list[str]] = None,
+    ) -> tuple[faiss.IndexFlatIP, list[int]]:
+        """
+        Build a vector index for descendent nodes.
+        """
+        index: Optional[faiss.IndexFlatIP] = None
+        node_ids: list[int] = []
+        for node in self.walk_tree(
+            descend_into_types=descend_into_types,
+            yield_node_types=node_type_filter,
+            edge_type_filter=edge_type_filter,
+        ):
+            if node.vector is None:
+                continue
+            if index is None:
+                dim: int = np.array(node.vector).shape[0]
+                index = faiss.IndexFlatIP(dim)
+            index.add(np.array([node.vector]))
+            node_ids.append(node.id)
+        assert index is not None
+        return index, node_ids
 
-    @property
-    def session(self) -> Any:
-        return self._session
+    def find(
+        self,
+        query_vector: list[float],
+        count: int = 10,
+        node_type_filter: Optional[list[str]] = None,
+        edge_type_filter: Optional[list[str]] = None,
+        descend_into_types: Optional[list[str]] = None,
+        similarity_threshold: Optional[list[float]] = None,
+    ) -> list[tuple[int, float]]:
+        index, node_ids = self.build_vector_index(
+            node_type_filter=node_type_filter,
+            edge_type_filter=edge_type_filter,
+            descend_into_types=descend_into_types,
+        )
+        query_vector = np.array(query_vector)
+        # D: distances/similarities, I: indices
+        # 0 is the query vector index
+        D, I = index.search(np.array([query_vector]), count)            
+        assert len(I) == 1
+        return [
+            (node_ids[I[0][i]], D[0][i])
+            for i in range(len(I[0]))
+            if similarity_threshold is None or D[i] >= similarity_threshold
+        ]
 
-    @session.setter
-    def session(self, value: Session):
-        self._session = value
-        self._sqlalchemy_obj = self._graph.get_node(self._session, self.id)
-
-    @property
-    def graph(self) -> SQLiteGraph:
-        return self._graph
-
-    @property
-    def id(self) -> int:
-        return self._sqlalchemy_obj.id
-
-    @property
-    def edge_type(self) -> str:
-        return self._sqlalchemy_obj.edge_type
-
-    @property
-    def from_id(self) -> int:
-        return self._sqlalchemy_obj.from_id
-
-    @property
-    def to_id(self) -> int:
-        return self._sqlalchemy_obj.to_id
-
-    @property
-    def sort_idx(self) -> int:
-        return self._sqlalchemy_obj.sort_idx
-
-    @sort_idx.setter
-    def sort_idx(self, value: int):
-        self._sqlalchemy_obj.sort_idx = value
-
-    def refresh(self):
-        assert isinstance(self.session, Session)
-        self.session.refresh(self._sqlalchemy_obj)
-
-    def save(self):
-        assert isinstance(self.session, Session)
-        self.session.add(self._sqlalchemy_obj)
-        self.session.flush()
+def _walk_tree_helper(
+    iter_node: "Node",
+    descend_into_types: list[str],
+    yield_node_types: list[str],
+    edge_type_filter: list[str],
+    seen: set,
+) -> Iterator[type["Node"]]:
+    for edge, node in iter_node.get_out_nodes(edge_type_filter=edge_type_filter):
+        assert isinstance(node, Node) and isinstance(edge, Edge)
+        if node.id in seen:
+            continue
+        seen.add(node.id)
+        if yield_node_types is None or node_type_matches_type_in_policy_list(node.node_type, tuple(yield_node_types)):
+            yield node
+        if descend_into_types is None or node_type_matches_type_in_policy_list(
+            node.node_type, tuple(descend_into_types)
+        ):
+            yield from _walk_tree_helper(node, descend_into_types, yield_node_types, edge_type_filter, seen)
