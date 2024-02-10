@@ -8,10 +8,10 @@ from typing import Iterator, Type
 
 from gstk.creation.graph_registry import CreationEdgeRegistry, CreationNode, CreationNodeRegistry, GroupProperties
 from gstk.creation.group import CreationGroup, new_group
+from gstk.graph.graph import SQLiteGraph
 from gstk.graph.interface.graph.graph import Graph, Node
-from gstk.graph.interface.graph.sqlite_graph import SQLiteGraph
-from gstk.graph.interface.resource_locator.local_file import LocalFileLocator
 from gstk.graph.interface.resource_locator.resource_locator import ResourceLocator
+from gstk.graph.local_file import LocalFileLocator
 from gstk.graph.registry_context_manager import graph_registries
 from gstk.graph.system_graph_registry import ProjectProperties, SystemEdgeType, SystemNodeType
 

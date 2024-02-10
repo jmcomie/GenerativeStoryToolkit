@@ -5,17 +5,15 @@ from typing import Optional
 
 from appdirs import user_data_dir
 
-from gstk.graph.interface.resource_locator.resource_locator import ResourceLocator
 
-
-class LocalFileLocator(ResourceLocator):
+class ProjectLocator:
     ROOT_DIRECTORY_NAME: str = "GenerativeStoryToolkit"
     PROJECTS_DIRECTORY_NAME: str = "gstk_projects"
 
     def __init__(self, base_path: Optional[Path] = None):
         if base_path is None:
-            base_path = Path(user_data_dir(LocalFileLocator.ROOT_DIRECTORY_NAME))
-        base_path = base_path / LocalFileLocator.PROJECTS_DIRECTORY_NAME
+            base_path = Path(user_data_dir(ProjectLocator.ROOT_DIRECTORY_NAME))
+        base_path = base_path / ProjectLocator.PROJECTS_DIRECTORY_NAME
         self._base_path = base_path
 
     @property

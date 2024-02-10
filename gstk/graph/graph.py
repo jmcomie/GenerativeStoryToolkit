@@ -3,15 +3,24 @@ from functools import cache, reduce
 from pathlib import Path
 from typing import Any, Iterator, Optional
 
+import faiss
+import numpy as np
 from pydantic import BaseModel
 from sqlalchemy import JSON, Column, DateTime, ForeignKey, Index, Integer, String, UniqueConstraint, create_engine
 from sqlalchemy.orm import Session, declarative_base, relationship, sessionmaker
 
-from gstk.graph.check import check_edge_add, check_node_add
-from gstk.graph.interface.graph.graph import Edge, Graph, Node
-from gstk.graph.registry import node_type_matches_type_in_policy_list
-from gstk.graph.registry_context_manager import current_node_registry
-from gstk.graph.system_graph_registry import SystemEdgeType, SystemNodeType
+from gstk.graph.graph import Edge, Graph, Node
+from gstk.graph.project_locator import ProjectLocator
+from gstk.graph.registry import (
+    EdgeCardinality,
+    EdgeTypeData,
+    GraphRegistry,
+    NodeTypeData,
+    ProjectProperties,
+    SystemEdgeType,
+    SystemNodeType,
+    node_type_matches_type_in_policy_list,
+)
 
 # Define the base model
 Base = declarative_base()
@@ -62,21 +71,24 @@ def get_session(path: str):
 
 class Graph:
     db_filename: str = "graph.sqlite"
-    media_directory: str = "media"
 
     def __init__(self, project_resource_location: Path):
         self._project_resource_location = Path(project_resource_location)
+        self._project_node_id: Optional[int] = None
+
+    def get_project_node_id(self, session: Session) -> Optional[int]:
+        if self._project_node_id is None:
+            self._project_node_id = self.get_project_node(session).id
+        return self._project_node_id
 
     def get_project_node(self, session: Session) -> Optional["Node"]:
         for node in session.query(NodeModel).filter_by(node_type=SystemNodeType.project):
             return Node(node, self, session)
 
-    def add_node(
-        self, session: Session, data: BaseModel, vector: Optional[list[float]] = None
-    ) -> "Node":
+    def add_node(self, session: Session, data: BaseModel, vector: Optional[list[float]] = None) -> "Node":
         check_node_add(session, self, data, vector=vector)
         node: NodeModel = NodeModel(
-            node_type=GraphRegistry.node_type_from_data(data),
+            node_type=list(GraphRegistry.get_node_types(data))[0],
             vector=vector,
             data=data.model_dump(),
         )
@@ -92,12 +104,12 @@ class Graph:
         to_id: int,
         sort_idx: Optional[int] = None,
     ) -> EdgeModel:
-        check_edge_add(session, self, edge_type, from_id, to_id)
+        check_edge_add(session, self, edge_type, self.get_node(session, from_id), self.get_node(session, to_id))
         edge: EdgeModel = EdgeModel(edge_type=edge_type, from_id=from_id, to_id=to_id, sort_idx=sort_idx)
         session.add(edge)
         session.flush()
         return edge
-    
+
     def delete_node(self, session: Session, node_id: int):
         node: Optional[NodeModel] = session.query(NodeModel).filter_by(id=node_id).first()
         if node is None:
@@ -145,7 +157,7 @@ class Graph:
 
 
 class Node:
-    def __init__(self, sqlalchemy_obj: NodeModel, graph: SQLiteGraph, session: Session):
+    def __init__(self, sqlalchemy_obj: NodeModel, graph: Graph, session: Session):
         if not isinstance(sqlalchemy_obj, NodeModel):
             raise ValueError(f"sqlalchemy_obj must be a NodeModel, not {type(sqlalchemy_obj)}")
         self._sqlalchemy_obj = sqlalchemy_obj
@@ -164,7 +176,7 @@ class Node:
             raise ValueError(f"sqlalchemy_obj must be a NodeModel, not {type(self._sqlalchemy_obj)}")
 
     @property
-    def graph(self) -> SQLiteGraph:
+    def graph(self) -> Graph:
         return self._graph
 
     @property
@@ -186,12 +198,12 @@ class Node:
     @property
     def data(self) -> Any:
         # Today: load into registry model.
-        return current_node_registry().get_node_type_data(self.node_type).model(**self._sqlalchemy_obj.data)
+        return GraphRegistry.get_node_type_data(self.node_type).model(**self._sqlalchemy_obj.data)
 
     @data.setter
     def data(self, value: BaseModel):
         # Should be an instance of register model -- check.
-        if not isinstance(value, current_node_registry().get_node_type_data(self.node_type).model):
+        if not isinstance(value, GraphRegistry.get_node_type_data(self.node_type).model):
             raise ValueError(f"Node data must be an instance of {self.node_type}, not {type(value)}")
         print("setting data")
         print(type(value))
@@ -231,16 +243,18 @@ class Node:
                 return Node(edge.out_node, self._graph, self.session)
         return None
 
-    def create_child(self, data: BaseModel, conflict_filter: Optional[dict] = None, overwrite_on_conflict: bool = False):
+    def create_child(self, data: BaseModel):
         node: NodeModel = self._graph.add_node(self.session, data)
-        edge: EdgeModel = self._graph.add_edge(self.session, SystemEdgeType.contains, self.id, node.id)
-        return edge, node
+        self._graph.add_edge(self.session, SystemEdgeType.contains, self.id, node.id)
+        return node
 
-    def create_child_reference(self, reference_to: "Node"|int, conflict_filter: Optional[dict] = None, overwrite_on_conflict: bool = False):
+    def create_child_reference(
+        self, reference_to: "Node" | int, conflict_filter: Optional[dict] = None, overwrite_on_conflict: bool = False
+    ):
         reference_node_id: int = reference_to if isinstance(reference_to, int) else reference_to.id
         edge: EdgeModel = self._graph.add_edge(self.session, SystemEdgeType.contains, self.id, reference_node_id)
 
-    def delete_child(self, child: int|"Node"):
+    def delete_child(self, child: int | "Node"):
         child_id = child_id if isinstance(child_id, int) else child_id.id
         self._graph.delete_node(self.session, child_id)
 
@@ -285,10 +299,10 @@ class Node:
         yield from _walk_tree_helper(self, descend_into_types, yield_node_types, edge_type_filter, seen)
 
     def build_vector_index(
-            self,
-            node_type_filter: Optional[list[str]] = None,
-            edge_type_filter: Optional[list[str]] = None,
-            descend_into_types: Optional[list[str]] = None,
+        self,
+        node_type_filter: Optional[list[str]] = None,
+        edge_type_filter: Optional[list[str]] = None,
+        descend_into_types: Optional[list[str]] = None,
     ) -> tuple[faiss.IndexFlatIP, list[int]]:
         """
         Build a vector index for descendent nodes.
@@ -327,13 +341,14 @@ class Node:
         query_vector = np.array(query_vector)
         # D: distances/similarities, I: indices
         # 0 is the query vector index
-        D, I = index.search(np.array([query_vector]), count)            
+        D, I = index.search(np.array([query_vector]), count)
         assert len(I) == 1
         return [
             (node_ids[I[0][i]], D[0][i])
             for i in range(len(I[0]))
             if similarity_threshold is None or D[i] >= similarity_threshold
         ]
+
 
 def _walk_tree_helper(
     iter_node: "Node",
@@ -353,3 +368,67 @@ def _walk_tree_helper(
             node.node_type, tuple(descend_into_types)
         ):
             yield from _walk_tree_helper(node, descend_into_types, yield_node_types, edge_type_filter, seen)
+
+
+def check_node_add(
+    session: Session, graph: Graph, node_type: str, data: Any, vector: Optional[list[float]] = None
+) -> bool:
+    node_type_data: NodeTypeData = GraphRegistry.get_node_type_data(node_type)
+
+    if not node_type_data.write_allowed:
+        raise ValueError(f"Node type {node_type} is not enabled")
+
+    if node_type_data.instance_limit is not None:
+        instance_count: int = len(list(graph.list_nodes(session, node_type_filter=[node_type])))
+        if instance_count >= node_type_data.instance_limit:
+            raise ValueError(f"Node type {node_type} has reached its instance limit")
+
+
+def check_edge_add(session: Session, graph: Graph, edge_type: str, from_node: Node, to_node: Node) -> bool:
+    edge_type_data: EdgeTypeData = GraphRegistry.get_edge_type_data(edge_type)
+
+    if not edge_type_data.write_allowed:
+        raise ValueError(f"Edge type {edge_type} is not enabled")
+
+    if edge_type_data.edge_cardinality == EdgeCardinality.ONE_TO_MANY:
+        # Look at all in edges of to_node.  Should be no edges of this type.
+        for _ in to_node.get_in_nodes(edge_type_filter=[edge_type]):
+            raise ValueError(f"Edge type {edge_type} already exists between {from_node.id} and {to_node.id}")
+    elif edge_type_data.edge_cardinality == EdgeCardinality.ONE_TO_ONE:
+        # Look at relevant edges from both nodes. Should be no edges of this type.
+        for _ in from_node.get_out_nodes(edge_type_filter=[edge_type]):
+            raise ValueError(f"Edge type {edge_type} already exists between {from_node.id} and {to_node.id}")
+        for _ in to_node.get_in_nodes(edge_type_filter=[edge_type]):
+            raise ValueError(f"Edge type {edge_type} already exists between {from_node.id} and {to_node.id}")
+    elif edge_type_data.edge_cardinality == EdgeCardinality.MANY_TO_MANY:
+        pass  # No checks needed.
+
+
+def new_project(
+    project_properties: ProjectProperties,
+    project_locator: ProjectLocator,
+) -> Node:
+    """
+    Create a new project with the given project_id and project_properties.
+    """
+    if project_locator.project_id_exists(project_properties.id):
+        raise ValueError(f"Project '{project_properties.id}' already exists")
+
+    graph = Graph(project_locator.get_project_resource_location(project_properties.id))
+    project_node: Node
+    session = graph.create_session()
+    project_node = graph.add_node(session, SystemNodeType.project, project_properties)
+    session.commit()
+    return project_node
+
+
+def get_project(project_id, project_locator: ProjectLocator) -> Node:
+    """
+    Gets the project with the given project_id. If the project_id does not exist,
+    raises a ValueError.
+    """
+    if not project_locator.project_id_exists(project_id):
+        raise ValueError(f"Project '{project_id}' not found")
+    graph: Graph = Graph(project_locator.get_project_resource_location(project_id))
+    session = graph.create_session()
+    return graph.get_project_node(session)

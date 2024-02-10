@@ -6,11 +6,7 @@ from typing import Optional
 
 from pydantic import BaseModel, Field
 
-from gstk.graph.registry import ALL_NODES, EdgeCardinality, EdgeRegistry, NodeRegistry
-from gstk.graph.system_graph_registry import SystemEdgeRegistry, SystemEdgeType, SystemNodeRegistry
-
-CreationNodeRegistry: NodeRegistry = SystemNodeRegistry.clone()
-CreationEdgeRegistry: EdgeRegistry = SystemEdgeRegistry.clone()
+from gstk.graph.registry import ALL_NODES, EdgeCardinality, GraphRegistry, SystemEdgeType
 
 
 class Role(StrEnum):
@@ -70,25 +66,25 @@ class SelectionData(BaseModel):
     reason: str = Field(default=None, description="The reason(s) that the nodes were selected.")
 
 
-CreationNodeRegistry.register_node(CreationNode.group, model=GroupProperties)
+GraphRegistry.register_node(CreationNode.group, model=GroupProperties)
 
-CreationNodeRegistry.register_node(CreationNode.selection, model=SelectionData)
+GraphRegistry.register_node(CreationNode.selection, model=SelectionData)
 
-CreationNodeRegistry.register_node(CreationNode.message, model=Message)
+GraphRegistry.register_node(CreationNode.message, model=Message)
 
-CreationNodeRegistry.register_node(
+GraphRegistry.register_node(
     CreationNode.labels,
     model=Labels,
     system_message="You are tasked with interpreting some term for a identifier and interpreting it "
     + "as a list of labels according to the logic of the prompt provided.",
 )
 
-CreationEdgeRegistry.register_connection_types(
+GraphRegistry.register_connection_types(
     CreationNode.group, CreationNode.message, [SystemEdgeType.references, SystemEdgeType.contains]
 )
 
-CreationEdgeRegistry.register_connection_types(CreationNode.group, CreationNode.group, [SystemEdgeType.contains])
+GraphRegistry.register_connection_types(CreationNode.group, CreationNode.group, [SystemEdgeType.contains])
 
-CreationEdgeRegistry.register_edge(
+GraphRegistry.register_edge(
     CreationEdge.created_by, EdgeCardinality.MANY_TO_MANY, connection_data=[[ALL_NODES, CreationNode.message]]
 )

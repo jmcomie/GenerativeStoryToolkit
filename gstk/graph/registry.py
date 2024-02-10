@@ -76,17 +76,19 @@ class GraphRegistry:
     def node_type(cls, node_type, instance_limit: Optional[int] = None):
         if node_type in cls.registry:
             raise ValueError(f"Node type {node_type} already registered")
+
         def decorator(model: type):
             system_message: Optional[str] = getattr(model, "_system_message", None)
             cls.register_node(node_type, model, instance_limit=instance_limit, system_message=system_message)
             return model
+
         return decorator
 
-    def get_node_types(cls, model: type) -> Iterator[str]:
+    def get_node_types(cls, model_type: type) -> Iterator[str]:
         for node_type, node_type_data in cls.node_type_map.items():
-            if node_type_data.model == model:
+            if node_type_data.model == model_type:
                 yield node_type
-        raise ValueError(f"Model {model} not registered.")
+        raise ValueError(f"Model {model_type} not registered.")
 
     def get_model(cls, node_type) -> type:
         return cls.registry[node_type]
@@ -121,9 +123,7 @@ class GraphRegistry:
             raise Exception(f"Edge type {edge_type} already registered.")
         if connection_data is None:
             connection_data = []
-        self.edge_type_map[edge_type] = EdgeTypeData(
-            edge_cardinality=edge_cardinality, connection_data=connection_data
-        )
+        self.edge_type_map[edge_type] = EdgeTypeData(edge_cardinality=edge_cardinality, connection_data=connection_data)
 
     def register_connection_type(self, from_node_type: str, to_node_type: str, edge_type: str):
         # If we have cardinality here, what does it look like?

@@ -20,10 +20,7 @@ from gstk.creation.formatters import (
     format_node_for_vectorization,
 )
 from gstk.creation.graph_registry import CreationEdge, CreationNode, GroupProperties, Message, Role, SelectionData
-from gstk.graph.interface.graph.graph import Node
 from gstk.graph.registry import NodeRegistry, NodeTypeData
-from gstk.graph.registry_context_manager import current_node_registry
-from gstk.graph.system_graph_registry import SystemEdgeType
 from gstk.llmlib.async_openai import get_chat_completion_response, get_function_tool, get_openai_vectorization
 
 
@@ -40,7 +37,7 @@ async def get_chat_completion_object_response(node_type: str, messages: list[Mes
     the GSTK creation and graph pattern and OpenAI chat completion.
     """
     node_registry: NodeRegistry = current_node_registry()
-    node_type_data: NodeTypeData = node_registry.get_node_type_data(node_type)
+    node_type_data: NodeTypeData = GraphRegistry.get_node_type_data(node_type)
     open_ai_normalized_node_type: str = node_type.replace(".", "_")
     response = await get_chat_completion_response(
         messages, tools=[get_function_tool(open_ai_normalized_node_type, node_type_data.model)]
