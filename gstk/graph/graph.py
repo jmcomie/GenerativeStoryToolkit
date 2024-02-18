@@ -1,7 +1,7 @@
 import datetime
 from functools import cache, reduce
 from pathlib import Path
-from typing import Any, Iterator, Optional
+from typing import Any, Iterator, Optional, Union
 
 import faiss
 import numpy as np
@@ -9,7 +9,6 @@ from pydantic import BaseModel
 from sqlalchemy import JSON, Column, DateTime, ForeignKey, Index, Integer, String, UniqueConstraint, create_engine
 from sqlalchemy.orm import Session, declarative_base, relationship, sessionmaker
 
-from gstk.graph.graph import Edge, Graph, Node
 from gstk.graph.project_locator import ProjectLocator
 from gstk.graph.registry import (
     EdgeCardinality,
@@ -205,8 +204,6 @@ class Node:
         # Should be an instance of register model -- check.
         if not isinstance(value, GraphRegistry.get_node_type_data(self.node_type).model):
             raise ValueError(f"Node data must be an instance of {self.node_type}, not {type(value)}")
-        print("setting data")
-        print(type(value))
         self._sqlalchemy_obj.data = value.model_dump()
 
     @property
@@ -243,19 +240,22 @@ class Node:
                 return Node(edge.out_node, self._graph, self.session)
         return None
 
-    def create_child(self, data: BaseModel):
-        node: NodeModel = self._graph.add_node(self.session, data)
+    def create_child(self, data: BaseModel) -> "Node":
+        node: Node = self._graph.add_node(self.session, data)
         self._graph.add_edge(self.session, SystemEdgeType.contains, self.id, node.id)
         return node
 
     def create_child_reference(
-        self, reference_to: "Node" | int, conflict_filter: Optional[dict] = None, overwrite_on_conflict: bool = False
+        self,
+        reference_to: Union["Node", int],
+        conflict_filter: Optional[dict] = None,
+        overwrite_on_conflict: bool = False,
     ):
         reference_node_id: int = reference_to if isinstance(reference_to, int) else reference_to.id
         edge: EdgeModel = self._graph.add_edge(self.session, SystemEdgeType.contains, self.id, reference_node_id)
 
-    def delete_child(self, child: int | "Node"):
-        child_id = child_id if isinstance(child_id, int) else child_id.id
+    def delete_child(self, child: Union[int, "Node"]):
+        child_id: int = child if isinstance(child, int) else child.id
         self._graph.delete_node(self.session, child_id)
 
     def _get_descendent_nodes(self, filters: list[dict], seen: set) -> Iterator["Node"]:

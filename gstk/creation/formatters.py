@@ -4,8 +4,7 @@ Formatters for representing graph nodes as strings.
 
 from pydantic import BaseModel
 
-from gstk.graph.interface.graph.graph import Node
-
+from gstk.graph.graph import Node
 
 
 def format_instance_for_vectorization(

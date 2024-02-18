@@ -7,12 +7,12 @@ bloat.
 
 from typing import Iterator, Optional
 
-import gstk.creation.api as creation_api
 from gstk.creation.formatters import format_node_for_vectorization
 from gstk.creation.graph_registry import CreationNode, GroupProperties
 from gstk.creation.group import CreationGroup, new_group
-from gstk.graph.interface.graph.graph import Node
-from gstk.graph.system_graph_registry import ProjectProperties, SystemEdgeType
+from gstk.graph.graph import Node, get_project, new_project
+from gstk.graph.project_locator import ProjectLocator
+from gstk.graph.registry import ProjectProperties
 
 
 class NotFoundError(Exception):
@@ -28,13 +28,15 @@ def print_node_list(node_list: list[Node]):
 def get_or_create_project(
     project_id: str, project_name: Optional[str] = None, project_description: Optional[str] = None
 ):
-    if not creation_api.project_id_exists(project_id):
+    project_locator: ProjectLocator = ProjectLocator()
+    if not project_locator.project_id_exists(project_id):
         print(f"Creating project {project_id}")
-        project: creation_api.CreationProject = creation_api.new_creation_project(
-            project_id, ProjectProperties(id=project_id, description=project_description, name=project_name)
+        project: Node = new_project(
+            ProjectProperties(id=project_id, description=project_description, name=project_name), project_locator
         )
-        project.root_group.node.session.commit()
-    return creation_api.get_creation_project(project_id)
+        project.session.commit()
+        return project
+    return get_project(project_id, project_locator)
 
 
 def print_group_nodes(

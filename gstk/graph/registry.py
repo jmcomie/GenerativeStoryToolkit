@@ -1,9 +1,11 @@
 import copy
 import re
+from dataclasses import Field
 from enum import Enum, StrEnum
 from functools import cache
-from typing import Iterator, Optional, Type
+from typing import Iterator, Optional, Type, Union
 
+import pydantic
 from pydantic import BaseModel
 
 ALL_NODES: str = "*"
@@ -73,75 +75,93 @@ class GraphRegistry:
     edge_type_map: dict[str, EdgeTypeData] = {}
 
     @classmethod
-    def node_type(cls, node_type, instance_limit: Optional[int] = None):
-        if node_type in cls.registry:
-            raise ValueError(f"Node type {node_type} already registered")
-
+    def node_type(cls, node_type, instance_limit: Optional[int] = None, child_types: list[str] = []):
         def decorator(model: type):
-            system_message: Optional[str] = getattr(model, "_system_message", None)
+            system_message: Union[Optional[str], pydantic.fields.ModelPrivateAttr, tuple] = getattr(
+                model, "_system_message", None
+            )
+            if isinstance(system_message, pydantic.fields.ModelPrivateAttr):
+                system_message = system_message.default
+            if isinstance(system_message, tuple):
+                assert len(system_message) == 1
+                system_message = system_message[0]
+            print(f"System message type {type(system_message)}")
+            print(f"Saw system message {system_message}")
             cls.register_node(node_type, model, instance_limit=instance_limit, system_message=system_message)
+            for child_type in child_types:
+                cls.register_connection_types(
+                    node_type, child_type, [SystemEdgeType.contains, SystemEdgeType.references]
+                )
             return model
 
         return decorator
 
+    @classmethod
     def get_node_types(cls, model_type: type) -> Iterator[str]:
         for node_type, node_type_data in cls.node_type_map.items():
             if node_type_data.model == model_type:
                 yield node_type
         raise ValueError(f"Model {model_type} not registered.")
 
+    @classmethod
     def get_model(cls, node_type) -> type:
-        return cls.registry[node_type]
+        return cls.get_node_type_data(node_type).model
 
+    @classmethod
     def register_node(
-        self,
+        cls,
         node_type: str,
         model: Type[BaseModel],
         instance_limit: Optional[int] = None,
         system_message: Optional[str] = None,
     ):
-        if node_type in self.node_type_map:
+        if node_type in cls.node_type_map:
             raise Exception(f"Node type {node_type} already registered.")
-        self.node_type_map[node_type] = NodeTypeData(
+        cls.node_type_map[node_type] = NodeTypeData(
             instance_limit=instance_limit, model=model, system_directive=system_message
         )
 
-    def get_node_type_data(self, node_type: str) -> NodeTypeData:
-        if node_type not in self.node_type_map:
+    @classmethod
+    def get_node_type_data(cls, node_type: str) -> NodeTypeData:
+        if node_type not in cls.node_type_map:
             raise Exception(f"Node type {node_type} not registered.")
-        return self.node_type_map[node_type]
+        return cls.node_type_map[node_type]
 
+    @classmethod
     def register_edge(
-        self,
+        cls,
         edge_type: str,
         edge_cardinality: EdgeCardinality,
-        system_message: Optional[str] = None,
         connection_data: Optional[list[tuple[str, str]]] = None,
     ):
         check_node_or_edge_type(edge_type)
-        if edge_type in self.edge_type_map:
+        if edge_type in cls.edge_type_map:
             raise Exception(f"Edge type {edge_type} already registered.")
         if connection_data is None:
             connection_data = []
-        self.edge_type_map[edge_type] = EdgeTypeData(edge_cardinality=edge_cardinality, connection_data=connection_data)
+        cls.edge_type_map[edge_type] = EdgeTypeData(edge_cardinality=edge_cardinality, connection_data=connection_data)
 
-    def register_connection_type(self, from_node_type: str, to_node_type: str, edge_type: str):
+    @classmethod
+    def register_connection_type(cls, from_node_type: str, to_node_type: str, edge_type: str):
         # If we have cardinality here, what does it look like?
-        if not self.is_registered(edge_type):
+        if edge_type not in cls.edge_type_map:
             raise Exception(f"Edge type {edge_type} not registered.")
-        self.edge_type_map[edge_type].connection_data.add((from_node_type, to_node_type))
+        cls.edge_type_map[edge_type].connection_data.add((from_node_type, to_node_type))
 
-    def register_connection_types(self, from_node_type: str, to_node_type: str, edge_type_list: list[str]):
+    @classmethod
+    def register_connection_types(cls, from_node_type: str, to_node_type: str, edge_type_list: list[str]):
         for edge_type in edge_type_list:
-            self.register_connection_type(from_node_type, to_node_type, edge_type)
+            cls.register_connection_type(from_node_type, to_node_type, edge_type)
 
-    def get_edge_type_data(self, edge_type: str) -> EdgeTypeData:
-        if edge_type not in self.edge_type_map:
+    @classmethod
+    def get_edge_type_data(cls, edge_type: str) -> EdgeTypeData:
+        if edge_type not in cls.edge_type_map:
             raise Exception(f"Edge type {edge_type} not registered.")
-        return self.edge_type_map[edge_type]
+        return cls.edge_type_map[edge_type]
 
-    def is_registered_connection(self, from_node_type: str, to_node_type: str, edge_type: str) -> bool:
-        for from_node_type_in_policy, to_node_type_in_policy in self.edge_type_map[edge_type].connection_data:
+    @classmethod
+    def is_registered_connection(cls, from_node_type: str, to_node_type: str, edge_type: str) -> bool:
+        for from_node_type_in_policy, to_node_type_in_policy in cls.edge_type_map[edge_type].connection_data:
             if node_type_matches_type_in_policy(
                 from_node_type, from_node_type_in_policy
             ) and node_type_matches_type_in_policy(to_node_type, to_node_type_in_policy):
@@ -150,9 +170,9 @@ class GraphRegistry:
 
 
 class SystemNodeType(StrEnum):
-    project = "system.project"
-    media = "system.media"
-    ALL = "system.*"
+    PROJECT = "system.project"
+    MEDIA = "system.media"
+    SYSTEM_ALL = "system.*"
 
 
 class SystemEdgeType(StrEnum):
@@ -161,7 +181,7 @@ class SystemEdgeType(StrEnum):
     references = "system.references"
 
 
-@GraphRegistry.node_type(SystemNodeType.project.value, instance_limit=1)
+@GraphRegistry.node_type(SystemNodeType.PROJECT, instance_limit=1)
 class ProjectProperties(BaseModel):
     id: str
     name: Optional[str] = None
@@ -169,7 +189,7 @@ class ProjectProperties(BaseModel):
     supplemental_data: Optional[dict] = None
 
 
-@GraphRegistry.node_type(SystemNodeType.media.value)
+@GraphRegistry.node_type(SystemNodeType.MEDIA)
 class MediaProperties(BaseModel):
     path: str
     name: Optional[str] = None
