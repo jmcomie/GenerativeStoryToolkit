@@ -290,13 +290,19 @@ class Node:
         descend_into_types: Optional[list[str]] = None,
         yield_node_types: Optional[list[str]] = None,
         edge_type_filter: Optional[list[str]] = None,
+        max_depth: int = 0,
     ) -> Iterator[type["Node"]]:
         """
         Cycle-safe but may traverse nodes closer to the project root than the given node.
         That logic will be inherited from a proper graph data object.
         """
+        if max_depth < 0:
+            return
+        yield self
+        if max_depth == 0:
+            return
         seen: set[int] = {self.id}
-        yield from _walk_tree_helper(self, descend_into_types, yield_node_types, edge_type_filter, seen)
+        yield from _walk_tree_helper(self, descend_into_types, yield_node_types, edge_type_filter, max_depth - 1, seen)
 
     def build_vector_index(
         self,
@@ -355,19 +361,32 @@ def _walk_tree_helper(
     descend_into_types: list[str],
     yield_node_types: list[str],
     edge_type_filter: list[str],
+    max_depth: int,
     seen: set,
 ) -> Iterator[type["Node"]]:
-    for edge, node in iter_node.get_out_nodes(edge_type_filter=edge_type_filter):
-        assert isinstance(node, Node) and isinstance(edge, Edge)
-        if node.id in seen:
+    if max_depth < 0:
+        return
+    for edge in iter_node.out_edges:
+        assert isinstance(edge, EdgeModel)
+        assert isinstance(edge.out_node, NodeModel)
+        if edge.out_node.id in seen:
             continue
-        seen.add(node.id)
-        if yield_node_types is None or node_type_matches_type_in_policy_list(node.node_type, tuple(yield_node_types)):
-            yield node
-        if descend_into_types is None or node_type_matches_type_in_policy_list(
-            node.node_type, tuple(descend_into_types)
+        seen.add(edge.out_node.id)
+        if yield_node_types is None or node_type_matches_type_in_policy_list(
+            edge.out_node.node_type, tuple(yield_node_types)
         ):
-            yield from _walk_tree_helper(node, descend_into_types, yield_node_types, edge_type_filter, seen)
+            yield Node(edge.out_node, iter_node.graph, iter_node.session)
+        if descend_into_types is None or node_type_matches_type_in_policy_list(
+            edge.out_node.node_type, tuple(descend_into_types)
+        ):
+            yield from _walk_tree_helper(
+                Node(edge.out_node, iter_node.graph, iter_node.session),
+                descend_into_types,
+                yield_node_types,
+                edge_type_filter,
+                max_depth - 1,
+                seen,
+            )
 
 
 def check_node_add(
