@@ -80,10 +80,10 @@ GraphRegistry.register_node(
 )
 
 GraphRegistry.register_connection_types(
-    CreationNode.group, CreationNode.message, [SystemEdgeType.references, SystemEdgeType.contains]
+    CreationNode.group, CreationNode.message, [SystemEdgeType.REFERENCES, SystemEdgeType.CONTAINS]
 )
 
-GraphRegistry.register_connection_types(CreationNode.group, CreationNode.group, [SystemEdgeType.contains])
+GraphRegistry.register_connection_types(CreationNode.group, CreationNode.group, [SystemEdgeType.CONTAINS])
 
 GraphRegistry.register_edge(
     CreationEdge.created_by, EdgeCardinality.MANY_TO_MANY, connection_data=[[ALL_NODES, CreationNode.message]]

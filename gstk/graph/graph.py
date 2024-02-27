@@ -1,7 +1,8 @@
+from collections import deque
 import datetime
 from functools import cache, reduce
 from pathlib import Path
-from typing import Any, Iterator, Optional, Union
+from typing import Any, Callable, Iterator, Optional, TypeVar, Union
 
 import faiss
 import numpy as np
@@ -23,6 +24,16 @@ from gstk.graph.registry import (
 
 # Define the base model
 Base = declarative_base()
+T = TypeVar('T')
+
+
+
+def breadth_first_traversal(root_node: T, node_children_getter: Callable[[T], list[T]]) -> Iterator[T]:
+    queue: deque[T] = deque([root_node])
+    while queue:
+        current_node: T = queue.popleft()
+        yield current_node
+        queue.extend(node_children_getter(current_node))
 
 
 class EdgeModel(Base):
@@ -81,13 +92,14 @@ class Graph:
         return self._project_node_id
 
     def get_project_node(self, session: Session) -> Optional["Node"]:
-        for node in session.query(NodeModel).filter_by(node_type=SystemNodeType.project):
+        for node in session.query(NodeModel).filter_by(node_type=SystemNodeType.PROJECT):
             return Node(node, self, session)
 
     def add_node(self, session: Session, data: BaseModel, vector: Optional[list[float]] = None) -> "Node":
-        check_node_add(session, self, data, vector=vector)
+        node_type: str = list(GraphRegistry.get_node_types(type(data)))[0]
+        check_node_add(session, self, node_type)
         node: NodeModel = NodeModel(
-            node_type=list(GraphRegistry.get_node_types(data))[0],
+            node_type=node_type,
             vector=vector,
             data=data.model_dump(),
         )
@@ -163,6 +175,9 @@ class Node:
         self._graph = graph
         self._session = session
 
+    def __repr__(self) -> str:
+        return f'<Node type={self.node_type}> object at {hex(id(self))}'
+
     @property
     def session(self) -> Any:
         return self._session
@@ -235,14 +250,14 @@ class Node:
 
     @property
     def parent(self):
-        for edge in self._sqlalchemy_obj.out_edges:
-            if edge.edge_type == SystemEdgeType.contains:
-                return Node(edge.out_node, self._graph, self.session)
+        for edge in self._sqlalchemy_obj.in_edges:
+            if edge.edge_type == SystemEdgeType.CONTAINS:
+                return Node(edge.in_node, self._graph, self.session)
         return None
 
     def create_child(self, data: BaseModel) -> "Node":
         node: Node = self._graph.add_node(self.session, data)
-        self._graph.add_edge(self.session, SystemEdgeType.contains, self.id, node.id)
+        self._graph.add_edge(self.session, SystemEdgeType.CONTAINS, self.id, node.id)
         return node
 
     def create_child_reference(
@@ -252,7 +267,7 @@ class Node:
         overwrite_on_conflict: bool = False,
     ):
         reference_node_id: int = reference_to if isinstance(reference_to, int) else reference_to.id
-        edge: EdgeModel = self._graph.add_edge(self.session, SystemEdgeType.contains, self.id, reference_node_id)
+        edge: EdgeModel = self._graph.add_edge(self.session, SystemEdgeType.CONTAINS, self.id, reference_node_id)
 
     def delete_child(self, child: Union[int, "Node"]):
         child_id: int = child if isinstance(child, int) else child.id
@@ -260,6 +275,7 @@ class Node:
 
     def _get_descendent_nodes(self, filters: list[dict], seen: set) -> Iterator["Node"]:
         for edge in self._sqlalchemy_obj.out_edges:
+            assert isinstance(edge, EdgeModel)
             if edge.out_node.id in seen:
                 continue
             seen.add(edge.out_node.id)
@@ -267,7 +283,7 @@ class Node:
             assert isinstance(edge.out_node, NodeModel)
             if self._check_node_data_against_filters(edge.out_node, filters):
                 yield Node(edge.out_node, self._graph, self.session)
-            if edge.edge_type == SystemEdgeType.contains:
+            if edge.edge_type == SystemEdgeType.CONTAINS:
                 yield from Node(edge.out_node, self._graph, self.session)._get_descendent_nodes(filters, seen)
 
     def get_descendent_nodes(self, filters: list[dict]) -> Iterator["Node"]:
@@ -287,22 +303,24 @@ class Node:
 
     def walk_tree(
         self,
-        descend_into_types: Optional[list[str]] = None,
         yield_node_types: Optional[list[str]] = None,
-        edge_type_filter: Optional[list[str]] = None,
-        max_depth: int = 0,
+        descend_into_types: Optional[list[str]] = None,
+        edge_type_filter: Optional[list[str]] = [SystemEdgeType.CONTAINS, SystemEdgeType.REFERENCES],
+        max_depth: Optional[int] = None,
     ) -> Iterator[type["Node"]]:
         """
         Cycle-safe but may traverse nodes closer to the project root than the given node.
         That logic will be inherited from a proper graph data object.
         """
-        if max_depth < 0:
+        if max_depth is not None and max_depth < 0:
             return
         yield self
         if max_depth == 0:
             return
+        if max_depth is not None:
+            max_depth -= 1
         seen: set[int] = {self.id}
-        yield from _walk_tree_helper(self, descend_into_types, yield_node_types, edge_type_filter, max_depth - 1, seen)
+        yield from _walk_tree_helper(self, descend_into_types, yield_node_types, edge_type_filter, max_depth, seen)
 
     def build_vector_index(
         self,
@@ -361,12 +379,14 @@ def _walk_tree_helper(
     descend_into_types: list[str],
     yield_node_types: list[str],
     edge_type_filter: list[str],
-    max_depth: int,
+    max_depth: Optional[int],
     seen: set,
 ) -> Iterator[type["Node"]]:
-    if max_depth < 0:
-        return
-    for edge in iter_node.out_edges:
+    if max_depth is not None:
+        if max_depth < 0:
+            return
+        max_depth -= 1
+    for edge in iter_node._sqlalchemy_obj.out_edges:
         assert isinstance(edge, EdgeModel)
         assert isinstance(edge.out_node, NodeModel)
         if edge.out_node.id in seen:
@@ -384,13 +404,13 @@ def _walk_tree_helper(
                 descend_into_types,
                 yield_node_types,
                 edge_type_filter,
-                max_depth - 1,
+                max_depth,
                 seen,
             )
 
 
 def check_node_add(
-    session: Session, graph: Graph, node_type: str, data: Any, vector: Optional[list[float]] = None
+    session: Session, graph: Graph, node_type: str
 ) -> bool:
     node_type_data: NodeTypeData = GraphRegistry.get_node_type_data(node_type)
 
@@ -436,18 +456,18 @@ def new_project(
     graph = Graph(project_locator.get_project_resource_location(project_properties.id))
     project_node: Node
     session = graph.create_session()
-    project_node = graph.add_node(session, SystemNodeType.project, project_properties)
+    project_node = graph.add_node(session, project_properties)
     session.commit()
     return project_node
 
 
-def get_project(project_id, project_locator: ProjectLocator) -> Node:
+def get_project(project_id, project_locator: ProjectLocator) -> Optional[Node]:
     """
     Gets the project with the given project_id. If the project_id does not exist,
     raises a ValueError.
     """
     if not project_locator.project_id_exists(project_id):
-        raise ValueError(f"Project '{project_id}' not found")
+        return None
     graph: Graph = Graph(project_locator.get_project_resource_location(project_id))
     session = graph.create_session()
     return graph.get_project_node(session)

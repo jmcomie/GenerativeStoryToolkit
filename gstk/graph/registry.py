@@ -85,12 +85,11 @@ class GraphRegistry:
             if isinstance(system_message, tuple):
                 assert len(system_message) == 1
                 system_message = system_message[0]
-            print(f"System message type {type(system_message)}")
-            print(f"Saw system message {system_message}")
+
             cls.register_node(node_type, model, instance_limit=instance_limit, system_message=system_message)
             for child_type in child_types:
                 cls.register_connection_types(
-                    node_type, child_type, [SystemEdgeType.contains, SystemEdgeType.references]
+                    node_type, child_type, [SystemEdgeType.CONTAINS, SystemEdgeType.REFERENCES]
                 )
             return model
 
@@ -98,10 +97,10 @@ class GraphRegistry:
 
     @classmethod
     def get_node_types(cls, model_type: type) -> Iterator[str]:
+        print(f"model_type: {model_type}")
         for node_type, node_type_data in cls.node_type_map.items():
             if node_type_data.model == model_type:
                 yield node_type
-        raise ValueError(f"Model {model_type} not registered.")
 
     @classmethod
     def get_model(cls, node_type) -> type:
@@ -176,9 +175,9 @@ class SystemNodeType(StrEnum):
 
 
 class SystemEdgeType(StrEnum):
-    clone = "system.clone"
-    contains = "system.contains"
-    references = "system.references"
+    CLONE = "system.clone"
+    CONTAINS = "system.contains"
+    REFERENCES = "system.references"
 
 
 @GraphRegistry.node_type(SystemNodeType.PROJECT, instance_limit=1)
@@ -197,13 +196,13 @@ class MediaProperties(BaseModel):
 
 
 GraphRegistry.register_edge(
-    SystemEdgeType.references,
+    SystemEdgeType.REFERENCES,
     edge_cardinality=EdgeCardinality.MANY_TO_MANY,
 )
 GraphRegistry.register_edge(
-    SystemEdgeType.clone, edge_cardinality=EdgeCardinality.ONE_TO_MANY, connection_data=[[ALL_NODES, ALL_NODES]]
+    SystemEdgeType.CLONE, edge_cardinality=EdgeCardinality.ONE_TO_MANY, connection_data=[[ALL_NODES, ALL_NODES]]
 )
-GraphRegistry.register_edge(SystemEdgeType.contains, EdgeCardinality.ONE_TO_MANY)
+GraphRegistry.register_edge(SystemEdgeType.CONTAINS, EdgeCardinality.ONE_TO_MANY)
 
 # Any node can contain or reference any other node.
-GraphRegistry.register_connection_types(ALL_NODES, ALL_NODES, [SystemEdgeType.contains, SystemEdgeType.references])
+GraphRegistry.register_connection_types(ALL_NODES, ALL_NODES, [SystemEdgeType.CONTAINS, SystemEdgeType.REFERENCES])
