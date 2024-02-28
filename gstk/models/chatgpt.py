@@ -13,11 +13,6 @@ class Role(StrEnum):
     ASSISTANT = "assistant"
 
 
-class GFTKMetadata(BaseModel):
-    output_identifier: Optional[str] = None
-    is_creation_output: Optional[bool] = False
-
-
 class Message(BaseModel):
     role: Role
     content: str

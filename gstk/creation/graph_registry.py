@@ -40,16 +40,16 @@ class ChatCompletionArguments(BaseModel):
 
 
 class CreationNode(StrEnum):
-    group = "creation.group"
-    message = "creation.message"
-    selection = "creation.selection"
-    labels = "creation.labels"
+    GROUP = "creation.group"
+    MESSAGE = "creation.message"
+    SELECTION = "creation.selection"
+    LABELS = "creation.labels"
     ALL = "creation.*"
 
 
 class CreationEdge(StrEnum):
-    metadata = "creation.metadata"
-    created_by = "creation.created_by"
+    METADATA = "creation.metadata"
+    CREATED_BY = "creation.created_by"
 
 
 class GroupProperties(BaseModel):
@@ -66,25 +66,25 @@ class SelectionData(BaseModel):
     reason: str = Field(default=None, description="The reason(s) that the nodes were selected.")
 
 
-GraphRegistry.register_node(CreationNode.group, model=GroupProperties)
+GraphRegistry.register_node(CreationNode.GROUP, model=GroupProperties)
 
-GraphRegistry.register_node(CreationNode.selection, model=SelectionData)
+GraphRegistry.register_node(CreationNode.SELECTION, model=SelectionData)
 
-GraphRegistry.register_node(CreationNode.message, model=Message)
+GraphRegistry.register_node(CreationNode.MESSAGE, model=Message)
 
 GraphRegistry.register_node(
-    CreationNode.labels,
+    CreationNode.LABELS,
     model=Labels,
     system_message="You are tasked with interpreting some term for a identifier and interpreting it "
     + "as a list of labels according to the logic of the prompt provided.",
 )
 
 GraphRegistry.register_connection_types(
-    CreationNode.group, CreationNode.message, [SystemEdgeType.REFERENCES, SystemEdgeType.CONTAINS]
+    CreationNode.GROUP, CreationNode.MESSAGE, [SystemEdgeType.REFERENCES, SystemEdgeType.CONTAINS]
 )
 
-GraphRegistry.register_connection_types(CreationNode.group, CreationNode.group, [SystemEdgeType.CONTAINS])
+GraphRegistry.register_connection_types(CreationNode.GROUP, CreationNode.GROUP, [SystemEdgeType.CONTAINS])
 
 GraphRegistry.register_edge(
-    CreationEdge.created_by, EdgeCardinality.MANY_TO_MANY, connection_data=[[ALL_NODES, CreationNode.message]]
+    CreationEdge.CREATED_BY, EdgeCardinality.MANY_TO_MANY, connection_data=[[ALL_NODES, CreationNode.MESSAGE]]
 )
