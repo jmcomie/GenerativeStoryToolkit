@@ -7,10 +7,10 @@ import gstk.config as cfg
 
 
 class Role(StrEnum):
-    system = "system"
-    user = "user"
-    function = "function"
-    assistant = "assistant"
+    SYSTEM = "system"
+    USER = "user"
+    FUNCTION = "function"
+    ASSISTANT = "assistant"
 
 
 class GFTKMetadata(BaseModel):
@@ -27,6 +27,8 @@ class Message(BaseModel):
         extra = "forbid"
         use_enum_values = True
 
+    def __str__(self):
+        return f"{str(self.role).upper()}\n{'-' * len(str(self.role))}\n{self.content}"
 
 class ChatCompletionArguments(BaseModel):
     id: str
