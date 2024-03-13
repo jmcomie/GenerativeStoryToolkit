@@ -23,7 +23,7 @@ class Message(BaseModel):
         use_enum_values = True
 
     def __str__(self):
-        return f"{str(self.role).upper()}\n{'-' * len(str(self.role))}\n{self.content}"
+        return f"{str(self.role).upper()} MESSAGE:\n{'-' * len(str(self.role + ' MESSAGE:'))}\n{self.content}"
 
 class ChatCompletionArguments(BaseModel):
     id: str

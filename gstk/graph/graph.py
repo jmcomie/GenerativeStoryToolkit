@@ -126,7 +126,8 @@ class Graph:
         if node is None:
             return
         if node.out_edges:
-            raise ValueError("Cannot delete node with outgoing edges")
+            for edge in node.out_edges:
+                session.delete(edge)
         session.delete(node)
 
     def delete_edge(self, session: Session, edge_id: int):
@@ -273,6 +274,9 @@ class Node:
         child_id: int = child if isinstance(child, int) else child.id
         self._graph.delete_node(self.session, child_id)
 
+    def delete(self):
+        self._graph.delete_node(self.session, self.id)
+
     def _get_descendent_nodes(self, filters: list[dict], seen: set) -> Iterator["Node"]:
         for edge in self._sqlalchemy_obj.out_edges:
             assert isinstance(edge, EdgeModel)
@@ -388,6 +392,10 @@ def _walk_tree_helper(
         max_depth -= 1
     for edge in iter_node._sqlalchemy_obj.out_edges:
         assert isinstance(edge, EdgeModel)
+        # Dangling edges have been occurring. Need to review foreign key constraint
+        # behavior.
+        if edge.out_node is None:
+            continue
         assert isinstance(edge.out_node, NodeModel)
         if edge.out_node.id in seen:
             continue

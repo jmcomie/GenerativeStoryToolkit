@@ -1,4 +1,13 @@
-CHAT_GPT_MODEL: str = "gpt-3.5-turbo-16k"
+from enum import StrEnum
+
+class ChatGPTModel(StrEnum):
+    GPT_3_5_TURBO = "gpt-3.5-turbo"
+    GPT_3_5_TURBO_16K = "gpt-3.5-turbo-16k"
+    GPT_4 = "gpt-4"
+    GPT_4_0314 = "gpt-4-0314"
+    GPT_4_0613 = "gpt-4-0613"
+
+CHAT_GPT_MODEL: ChatGPTModel = ChatGPTModel.GPT_4
 # https://platform.openai.com/docs/guides/embeddings/embedding-models
 CHAT_GPT_EMBEDDING_MODEL: str = "text-embedding-ada-002"
 CHAT_GPT_TEMPERATURE: int = 0.1
@@ -14,3 +23,4 @@ CHAT_GPT_MODEL_TOKEN_LIMIT_DICT: dict[str, int] = {
 CONTEXT_TRUNCATE_THRESHOLD: float = 0.8
 CONTEXT_TRUNCATE_SEQUENCE: list[int] = [1000, 900, 800, 700, 600, 500, 400, 300, 200, 100, 50]
 IMAGE_DATA_FILENAME = "image_data"
+

@@ -26,7 +26,7 @@ async def get_chat_completion_response(
     messages: list[Message],
     tools: Optional[list[dict]] = None,
     chat_gpt_temperature: float = cfg.CHAT_GPT_TEMPERATURE,
-    chat_gpt_model: str = cfg.CHAT_GPT_MODEL,
+    chat_gpt_model: cfg.ChatGPTModel = cfg.CHAT_GPT_MODEL,
 ):
     """
     Implements function calling behavior as described here.
@@ -49,11 +49,11 @@ async def get_chat_completion_response(
     openai.api_key = os.environ["OPENAI_API_KEY"]
     # max_tokens argument not used.
     return await ChatCompletion.acreate(
-        model=chat_gpt_model,
+        model=str(chat_gpt_model),
         messages=[message.model_dump(exclude={"name"}) for message in messages],
         tools=tools,
         temperature=chat_gpt_temperature,
-        tool_choice=tool_choice,
+        tool_choice=tool_choice
     )
 
 
