@@ -241,13 +241,13 @@ class Node:
                     return False
         return True
 
-    def list_children(self, filters=[]) -> Iterator["Node"]:
-        for edge in self._sqlalchemy_obj.out_edges:
-            assert isinstance(edge, EdgeModel)
-            assert isinstance(edge.out_node, NodeModel)
-            if not self._check_node_data_against_filters(edge.out_node, filters):
+    def list_children(self, node_types: Optional[list[str]] = None, filters=[]) -> Iterator["Node"]:
+        for node in self.walk_tree(yield_node_types=node_types, max_depth=1):
+            if node.id == self.id:
                 continue
-            yield Node(edge.out_node, self._graph, self.session)
+            if not self._check_node_data_against_filters(node._sqlalchemy_obj, filters):
+                continue
+            yield node
 
     @property
     def parent(self):

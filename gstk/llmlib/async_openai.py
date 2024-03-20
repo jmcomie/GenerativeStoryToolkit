@@ -27,7 +27,7 @@ async def get_chat_completion_response(
     tools: Optional[list[dict]] = None,
     chat_gpt_temperature: float = cfg.CHAT_GPT_TEMPERATURE,
     chat_gpt_model: cfg.ChatGPTModel = cfg.CHAT_GPT_MODEL,
-):
+) -> ChatCompletion:
     """
     Implements function calling behavior as described here.
     https://platform.openai.com/docs/guides/gpt/function-calling
@@ -48,13 +48,15 @@ async def get_chat_completion_response(
 
     openai.api_key = os.environ["OPENAI_API_KEY"]
     # max_tokens argument not used.
-    return await ChatCompletion.acreate(
+    chat_completion: ChatCompletion = await ChatCompletion.acreate(
         model=str(chat_gpt_model),
         messages=[message.model_dump(exclude={"name"}) for message in messages],
         tools=tools,
         temperature=chat_gpt_temperature,
         tool_choice=tool_choice
     )
+    # Use tiktoken to get token count for cost calculation purposes.
+    return chat_completion
 
 
 def get_function_tool(name: str, model: type[BaseModel]):
