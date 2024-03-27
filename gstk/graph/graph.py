@@ -234,6 +234,10 @@ class Node:
     def deleted_at(self) -> datetime.datetime:
         return self._sqlalchemy_obj.deleted_at
 
+    @deleted_at.setter
+    def deleted_at(self, value: datetime.datetime):
+        self._sqlalchemy_obj.deleted_at = value
+
     def _check_node_data_against_filters(self, node: NodeModel, filters: list[dict]) -> bool:
         for filter in filters:
             for key, value in filter.items():
@@ -400,6 +404,8 @@ def _walk_tree_helper(
         if edge.out_node.id in seen:
             continue
         seen.add(edge.out_node.id)
+        if edge.out_node.deleted_at:
+            continue
         if yield_node_types is None or node_type_matches_type_in_policy_list(
             edge.out_node.node_type, tuple(yield_node_types)
         ):

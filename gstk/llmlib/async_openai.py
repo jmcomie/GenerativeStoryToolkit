@@ -26,7 +26,7 @@ async def get_chat_completion_response(
     messages: list[Message],
     tools: Optional[list[dict]] = None,
     chat_gpt_temperature: float = cfg.CHAT_GPT_TEMPERATURE,
-    chat_gpt_model: cfg.ChatGPTModel = cfg.CHAT_GPT_MODEL,
+    chat_gpt_model: cfg.OpenAIModelName = cfg.CHAT_GPT_MODEL,
 ) -> ChatCompletion:
     """
     Implements function calling behavior as described here.

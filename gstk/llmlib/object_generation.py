@@ -2,14 +2,14 @@
 
 import json
 from pydantic import BaseModel
-from gstk.config import ChatGPTModel, CHAT_GPT_MODEL
+from gstk.config import CHAT_GPT_MODEL, OpenAIModelName
 from gstk.creation.graph_registry import Message
 from gstk.graph.registry import GraphRegistry, NodeTypeData
 from gstk.llmlib.async_openai import get_chat_completion_response, get_function_tool
 
 
 async def get_chat_completion_object_response(
-        node_type: str, messages: list[Message], model: ChatGPTModel = CHAT_GPT_MODEL) -> BaseModel:
+        node_type: str, messages: list[Message], model: OpenAIModelName = CHAT_GPT_MODEL) -> BaseModel:
     """
     Sends the message list to OpenAI and returns the response as an instance of the
     configured type for the node_type. This serves as the primary bridge between
@@ -17,13 +17,11 @@ async def get_chat_completion_object_response(
     """
     node_type_data: NodeTypeData = GraphRegistry.get_node_type_data(node_type)
     open_ai_normalized_node_type: str = node_type.replace(".", "_")
-    response = await get_chat_completion_response(
-        messages, tools=[get_function_tool(open_ai_normalized_node_type, node_type_data.model)]
+    chat_completion = await get_chat_completion_response(
+        messages, tools=[get_function_tool(open_ai_normalized_node_type, node_type_data.model)],
+        chat_gpt_model=model
     )
     instance: BaseModel = node_type_data.model(
-        **json.loads(response.choices[0].message.tool_calls[0].function.arguments)
+        **json.loads(chat_completion.choices[0].message.tool_calls[0].function.arguments)
     )
-    return instance
-
-
-
+    return instance, chat_completion
